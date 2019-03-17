@@ -1,37 +1,34 @@
 ## Welcome to EconEval
+(Work in progress, not ready for production)
 
-You can use the [editor on GitHub](https://github.com/hmelberg/econeval/edit/master/README.md) to maintain and preview the content for your website in Markdown files.
+## define a model
+hip = nx.DiGraph()
 
-Whenever you commit to this repository, GitHub Pages will run [Jekyll](https://jekyllrb.com/) to rebuild the pages in your site, from the content in your Markdown files.
+## add states to the model
+states = [('healthy', {'utility':0.9, 'cost': 0}),
+          ('dead', {'utility':0, 'cost': 0}),
+          ('sick', {'utility':0.7, 'cost': 1000})]
+hip.add_nodes_from(states)
 
-### Markdown
+## add transition probabilities
+transitions = [('healthy', 'healthy', {'p':0.98}),
+               ('healthy', 'sick', {'p':0.01}),
+               ('healthy', 'dead', {'p':0.01}),
+               ('sick', 'sick', {'p':0.5}),
+               ('sick', 'dead', {'p':0.3}),
+               ('sick', 'healthy', {'p':0.2}),
+               ('dead', 'dead', {'p':1})]
 
-Markdown is a lightweight and easy-to-use syntax for styling your writing. It includes conventions for
+hip.add_edges_from(transitions)
 
-```markdown
-Syntax highlighted code block
+## analyse
 
-# Header 1
-## Header 2
-### Header 3
+# Valculate cost-efficiency
+hip.cost_per_qualy()
 
-- Bulleted
-- List
+# Probability sensitivity analysis
+hip.psa()
 
-1. Numbered
-2. List
+# Value fo information analysis
+hip.evpi()
 
-**Bold** and _Italic_ and `Code` text
-
-[Link](url) and ![Image](src)
-```
-
-For more details see [GitHub Flavored Markdown](https://guides.github.com/features/mastering-markdown/).
-
-### Jekyll Themes
-
-Your Pages site will use the layout and styles from the Jekyll theme you have selected in your [repository settings](https://github.com/hmelberg/econeval/settings). The name of this theme is saved in the Jekyll `_config.yml` configuration file.
-
-### Support or Contact
-
-Having trouble with Pages? Check out our [documentation](https://help.github.com/categories/github-pages-basics/) or [contact support](https://github.com/contact) and we’ll help you sort it out.
