@@ -1,4 +1,4 @@
-## Welcome to EconEval
+# Welcome to EconEval
 (Work in progress, not ready for production)
 
 ## define a model
@@ -23,12 +23,12 @@ hip.add_edges_from(transitions)
 
 ## analyse
 
-# Valculate cost-efficiency
+### Valculate cost-efficiency
 hip.cost_per_qualy()
 
-# Probability sensitivity analysis
+### Probability sensitivity analysis
 hip.psa()
 
-# Value fo information analysis
+### Value fo information analysis
 hip.evpi()
 
