@@ -29,6 +29,6 @@ hip.cost_per_qualy()
 ### Probability sensitivity analysis
 hip.psa()
 
-### Value fo information analysis
+### Value of information analysis
 hip.evpi()
 
