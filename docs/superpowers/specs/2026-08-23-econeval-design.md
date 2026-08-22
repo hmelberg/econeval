@@ -24,7 +24,7 @@ The model document (YAML canonical, JSON isomorphic in memory) is the single sou
 
 ## The model format
 
-Format version key `econeval: 1`. Top-level keys: `econeval`, `type` (`tree` | `markov`, later `abm`), `name`, `description?`, `settings`, `params`, `tables?`, and per type either `states` + `transitions` + `strategies` (markov) or `tree` (tree). Optional `layout`. Unknown keys are preserved on round-trip but flagged by validation.
+Format version key `econeval: 1`. Top-level keys: `econeval`, `type` (`tree` | `markov`, later `abm`), `name`, `description?`, `meta?` (free-form provenance: author, date, references…), `settings`, `params`, `tables?`, `models?` (named sub-models, see below), and per type either `states` + `transitions` + `strategies` (markov) or `tree` (tree). Optional `layout`. Unknown keys are preserved on round-trip but flagged by validation.
 
 ### Markov example
 
@@ -43,8 +43,12 @@ settings:
   start: A                      # or a distribution: {A: 0.8, B: 0.2}; default: first state
 
 params:
-  p_AB:   {value: 0.202, low: 0.15, high: 0.25, dist: beta(202, 798)}
-  rr:     {value: 0.509, dist: lognormal(-0.675, 0.173), source: "Chancellor 1997"}
+  p_AB:                         # block style — see the YAML style rule below
+    value: 0.202
+    low: 0.15
+    high: 0.25
+    dist: beta(202, 798)
+  rr: 1                         # base params describe the comparator: no treatment effect
   c_drug: 2278                  # bare number = shorthand for {value: 2278}
 
 states:
@@ -58,8 +62,10 @@ transitions:
   death: {death: 1}
 
 strategies:
-  mono:  {}                     # baseline: params as declared
-  combo: {c_drug: 5343}         # strategy = named parameter overrides
+  mono: {}                      # comparator: params as declared
+  combo:                        # overrides = what the intervention changes
+    c_drug: 5343
+    rr: lognormal(-0.675, 0.173)   # an expression: sampled in PSA, mean in base case
 ```
 
 ### Tree example
@@ -72,7 +78,9 @@ type: tree
 name: Surgery vs medication
 
 params:
-  p_success_surg: {value: 0.9, dist: beta(90, 10)}
+  p_success_surg:
+    value: 0.9
+    dist: beta(90, 10)
 
 tree:
   Treatment?:                   # root = decision node; its children are the strategies
@@ -88,18 +96,73 @@ tree:
 
 ### Conventions (normative)
 
-- **Everything is an expression.** Any value may be a number, arithmetic over param names, or a distribution call. One spec serves all runs: deterministic uses `value` (or the distribution mean if only `dist` is given), PSA samples `dist`, one-way DSA sweeps `low`–`high`. Params may reference other params (must form a DAG; cycles are validation errors).
-- **Expression language** (in `core/expr.js`): numbers, `+ - * / ^`, parentheses, names, function calls, `min`, `max`, `if(cond, a, b)`, comparisons, `lookup(table, x)` (linear interpolation), reserved words `t` (cycle number, 1-based), `state_time` (cycles spent in current state), `rest`.
+- **Everything is an expression.** Any value may be a number, arithmetic over param names, or a distribution call. One spec serves all runs: deterministic uses `value` (or the distribution mean if only `dist` is given), PSA samples `dist`, one-way DSA sweeps `low`–`high`. Params may reference other params (must form a DAG; cycles are validation errors). Strategy overrides are expressions too — including distribution calls.
+- **YAML style rule.** Inside flow mappings (`{...}`) YAML splits on the commas inside a call like `beta(202, 798)` — a syntax error. Canonical style is therefore block style for any mapping that contains a function call; the app's serializer always emits block style there. Hand-written flow style needs quotes: `dist: "beta(202, 798)"`. Validation gives a targeted hint when it sees this mistake.
+- **Units are normative.** `utility` is an *annual* weight (QALY accrual = utility × cycle length in years × occupancy — matches how utilities appear in the literature). `cost` is *per cycle* (matches how costs are entered). `cycle` accepts `N year|month|week|day`. Discount rates are annual; the engine converts to per-cycle.
+- **Expression language** (in `core/expr.js`): numbers, `+ - * / ^`, parentheses, names, function calls, `min`, `max`, `if(cond, a, b)`, comparisons, `lookup(table, x)` (linear interpolation), `rate_to_prob(r)`, `prob_to_rate(p)`, `rescale_prob(p, from: 1 year)` (rate/probability conversions over the model's cycle length — the most common hand-rolled error in applied models, so built in). Reserved words: `t` (cycle number, 1-based), `state_time` (cycles spent in current state), `time` (elapsed model time in years = t × cycle length), `age` (`settings.age` + `time`; requires `settings.age`), `rest`.
 - **`rest`**: residual probability. In a Markov transition row: 1 minus the sum of the other outgoing probabilities. Among tree siblings: 1 minus the sum of sibling `p`s. At most one per row/sibling-group; validation enforces the remainder is in [0,1]. No silent renormalisation anywhere (surprise principle: errors are surfaced, never papered over).
 - **Distributions** — heemod/field vocabulary, exactly these parameterisations: `beta(shape1, shape2)`, `gamma(mean, sd)`, `normal(mean, sd)`, `lognormal(meanlog, sdlog)`, `uniform(min, max)`, `triangular(min, mode, max)`. Deterministic value of a distribution = its mean.
 - **Multinomial rows** (markov): a transition row may be written `A: {multinomial: {A: 721, B: 202, death: 10}}` — observed counts per target. Deterministic run normalises the counts; PSA draws the row from the implied Dirichlet. Row sums to 1 by construction; no `rest` allowed in such a row.
-- **Tree node vocabulary**: reserved attribute keys are `p`, `cost`, `utility`, `kind`, `source`, `notes`, `children`; any other nested mapping key is a child node. `children:` is the unambiguous fallback (needed if a node must be named e.g. "cost"). `kind` is inferred (root = decision, has-`p` = chance branch, leaf = terminal) and only written when overriding. Costs/utilities accumulate along the path root→leaf.
+- **Tree node vocabulary**: reserved attribute keys are `p`, `cost`, `utility`, `source`, `notes`, `children`, `model`, `with`, `delay` (plus `kind`, internal-only — node kinds are always inferred: root = decision, has-`p` = chance branch, leaf = terminal; `kind` stays out of user docs as a parser-level override). Any other *mapping* key is a child node; any other *scalar* key is an extra tracked payoff (below). `children:` is the unambiguous fallback (needed if a node must be named e.g. "cost"). Costs/utilities accumulate along the path root→leaf. Decision nodes below the root are a v1 validation error with a clear message (sequential decisions/optimal-policy rollback is a future extension).
+- **Extra tracked payoffs**: any non-reserved scalar attribute on a state or tree node (e.g. `c_drug: 2278`, `relapses: 1`) is accumulated and reported in the trace and results, but only `cost` and `utility` drive the CEA. Gives cost decomposition and event counting for free.
+- **Strategy idiom** (documented, not enforced): base params describe the comparator; each strategy overrides what the intervention changes (e.g. `rr: 1` at base, `combo: {rr: lognormal(...)}`).
+- **PSA correlations**: `settings.psa.correlations: [{a: p_AB, b: rr, r: 0.4}]` — heemod-style pairwise correlations, implemented via a Gaussian copula over the parameters' quantile functions; unlisted pairs are independent. Format is fixed now; the engine support lands with the PSA phase.
 - **Transition rewards** (markov): a transition value may be an object `{p: expr, cost: expr, utility: expr}` for one-time rewards on making that transition; plain value = probability shorthand.
 - **Tables**: named columns of equal length, e.g. `mortality: {age: [40,50,60], rate: [0.002,0.005,0.012]}`; accessed via `lookup(mortality, age0 + t)` reading first column as x, second as y (multi-column lookup with an explicit column argument allowed: `lookup(mortality, x, rate)`).
 - **`state_time`**: implemented by internal tunnel expansion of states whose expressions use it (up to `cycles` copies); invisible in the document.
 - **Strategies** are named parameter-override maps (v1). Per-strategy structural overrides may come later; parameter dispatch covers the standard cases.
 - **`layout:`** optional block, `nodeName: [x, y]`; semantic model stays clean and diffable. Missing/partial layout → auto-layout.
 - **`source:`/`notes:`** allowed on params, states, transitions, tree nodes — the model carries its own evidence trail.
+
+### Sub-models (composition and reuse)
+
+A top-level `models:` block holds named sub-models, each defined exactly like a standalone model (its own `type`, `params`, `states`, `transitions` — or a subtree). Any tree terminal attaches one with `model:`; `with:` overrides its parameters at that attachment point. This covers both the classic HTA hybrid (acute-phase tree feeding long-term Markov models) and structural reuse (same model, slightly different probabilities — or exactly the same model, attached in several places).
+
+```yaml
+econeval: 1
+type: tree
+name: Chemo vs surgery
+
+params:
+  p_cure_chemo:
+    value: 0.40
+    dist: beta(40, 60)
+
+models:
+  survival:                     # a full markov model, reusable by name
+    type: markov
+    settings: {cycles: 40, cycle: 1 year}
+    params:
+      p_prog: 0.10
+    states:
+      well: {cost: 500,  utility: 0.90}
+      prog: {cost: 3000, utility: 0.60}
+      dead: {cost: 0,    utility: 0}
+    transitions:
+      well: {well: rest, prog: p_prog, dead: 0.02}
+      prog: {prog: rest, dead: 0.20}
+      dead: {dead: 1}
+
+tree:
+  Treatment?:
+    Chemo:
+      cost: 12000
+      Cured:    {p: p_cure_chemo, model: survival}                  # exact reuse
+      NotCured: {p: rest, model: survival, with: {p_prog: 0.25}}    # same structure, new probability
+    Surgery:
+      cost: 30000
+      Cured:    {p: 0.60, model: survival}
+      Relapse:  {p: rest, model: survival, with: {start: prog}}     # reuse, different entry state
+```
+
+Semantics:
+
+- **Attachment**: a terminal with `model:` adds the sub-model's expected discounted cost/QALYs (per person arriving there) to its path payoffs. v1 attaches sub-models at tree terminals only; a Markov state cannot embed a model.
+- **Scoping**: name resolution inside a sub-model is `with:` overrides → the sub-model's own `params` → parent params. `with:` values are expressions evaluated in parent scope. Strategies keep overriding only global names; to vary a sub-model parameter per strategy, route it through a global param (`with: {p_prog: p_prog_chemo}`).
+- **PSA**: one named parameter = one draw per iteration, so two attachments of the same sub-model share uncertainty (usually what you want); anything overridden via `with:` is decoupled.
+- **Settings**: a sub-model owns its `cycles`/`cycle`/`start`; discount rates, `wtp`, `psa` live only at the top level (one evaluation, one discount policy). Optional `delay: 1 year` on the attachment shifts the sub-model's discounting start (default 0), for trees that represent an acute phase with real duration.
+- **Validation**: references must exist; reference cycles are errors. Sub-models may reference other sub-models (still acyclic).
+- **Canvas**: an attachment renders as a distinct capsule node; double-click drills in, breadcrumb navigates back. The Markov editor is the sub-model editor — no separate UI.
 
 ## Modules
 
@@ -108,9 +171,9 @@ core/model.js     parse, validate, serialize (YAML <-> JSON); schema errors with
 core/expr.js      expression parser/evaluator (Pratt), pure
 core/dist.js      distributions (sample/mean/quantile) + seeded RNG (sfc32/mulberry32)
 engine/markov.js  cohort trace, discounting, correction (none/half-cycle/life-table)
-engine/tree.js    rollback expected values
+engine/tree.js    rollback expected values, sub-model attachment (recurses into engine/markov.js)
 analysis/cea.js   per-strategy totals, incremental table, dominance + extended dominance, ICER, NMB
-analysis/psa.js   sampling loop -> CE-plane, CEAC (+CEAF), EVPI
+analysis/psa.js   sampling loop -> CE-plane, CEAC (+CEAF), EVPI; correlated draws via Gaussian copula
 analysis/dsa.js   one-way (tornado on NMB at settings.wtp, metric selectable), two-way grid
 analysis/check.js validation: rows sum to 1, p in [0,1], unreachable states, dead ends, DAG params,
                   missing dist warnings for PSA
