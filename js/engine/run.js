@@ -33,20 +33,35 @@ function evalChanceSubtree(subModel, subEnv, attach) {
   return strategies[root.name];
 }
 
-// Build the attach(node, env) -> {cost, qaly, extras} closure for one model scope (`scope` is
-// whichever model — top-level or a nested sub-model — owns the `.models` registry `node.model`
-// is looked up in; sub-models may reference sibling sub-models in their OWN `models:` block,
-// so recursing into a tree-type sub-model re-scopes to THAT sub-model via makeAttach again).
-// `topDiscount`/`depthBox` are shared across the whole run() call: discount is always the
-// TOP-LEVEL model's settings.discount (never a sub-model's — sub-models can't declare their own),
-// and depthBox counts nested attach() calls so a reference cycle fails loud (structural cycle
-// detection itself is check.js's job; this is just a stack-overflow guard).
-function makeAttach(scope, topDiscount, depthBox) {
+// Look up node.model against a LEXICAL CHAIN of models: registries — `chain` is an array of
+// `{name?, models}`-shaped registries ordered innermost-first (the current model's own `models:`
+// block first, then its ancestors' up to the top-level's). Mirrors how param scoping chains via
+// parent envs (resolve.js): a sub-model's own `models:` block can shadow an ancestor's, and a
+// name not found locally falls back through the chain — this is what makes a SIBLING reference
+// (a top-level sub-model's terminal referencing another top-level sub-model, without redeclaring
+// it in its own `models:` block) resolve correctly. CONTROLLER RULING (supersedes the earlier
+// per-model-local-only design): lookup is own-first-then-ancestors, not scope-local-only.
+function lookupSubModel(chain, name) {
+  for (const registry of chain) {
+    if (registry && Object.prototype.hasOwnProperty.call(registry, name)) return registry[name];
+  }
+  return undefined;
+}
+
+// Build the attach(node, env) -> {cost, qaly, extras} closure for one point in the lexical chain
+// (`chain[0].models` is searched first, then `chain[1].models`, etc. — see lookupSubModel).
+// Recursing into a tree-type sub-model PREPENDS that sub-model onto the chain (so its own
+// `models:` block can shadow an ancestor's, while ancestor names still fall through). `topDiscount`
+// /`depthBox` are shared across the whole run() call: discount is always the TOP-LEVEL model's
+// settings.discount (never a sub-model's — sub-models can't declare their own), and depthBox
+// counts nested attach() calls so a reference cycle fails loud (structural cycle detection itself
+// is check.js's job; this is just a stack-overflow guard).
+function makeAttach(chain, topDiscount, depthBox) {
   return function attach(node, env) {
     if (depthBox.n > MAX_ATTACH_DEPTH)
       throw new ModelError(`tree: sub-model attachment depth exceeded ${MAX_ATTACH_DEPTH} (possible reference cycle) at 'model: ${node.model}'`, { path: `models.${node.model}` });
 
-    const subModel = scope.models?.[node.model];
+    const subModel = lookupSubModel(chain.map((m) => m.models), node.model);
     if (!subModel)
       throw new ModelError(`tree.${node.name}: unknown sub-model '${node.model}'`, { path: `models.${node.model}` });
 
@@ -64,7 +79,7 @@ function makeAttach(scope, topDiscount, depthBox) {
         return { cost: totals.cost, qaly: totals.qaly, extras: totals.extras };
       }
       if (subModel.type === 'tree') {
-        return evalChanceSubtree(subModel, subEnv, makeAttach(subModel, topDiscount, depthBox));
+        return evalChanceSubtree(subModel, subEnv, makeAttach([subModel, ...chain], topDiscount, depthBox));
       }
       throw new ModelError(`models.${node.model}: unsupported sub-model type '${subModel.type}'`, { path: `models.${node.model}` });
     } finally {
@@ -98,7 +113,7 @@ export function run(model, opts = {}) {
 
   if (model.type === 'tree') {
     const env = makeEnv(model, { mode, rand, overrides });
-    const attach = makeAttach(model, model.settings.discount, { n: 0 });
+    const attach = makeAttach([model], model.settings.discount, { n: 0 });
     const { strategies } = runTree(model, env, { discount: model.settings.discount }, attach);
     return { strategies };
   }

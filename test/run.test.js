@@ -110,3 +110,41 @@ tree:
   const r = run(m, {});
   close(r.strategies.Only.qaly, 0.5);   // a-occupancy after 1 cycle = 1-0.5
 });
+
+test('sibling sub-model reference resolves via lexical chain (controller ruling)', () => {
+  // Top-level models: defines two SIBLINGS, `chronic` (markov) and `acute` (tree, chance-rooted).
+  // The main tree attaches `acute`; a terminal INSIDE acute references `chronic` by name even
+  // though acute has no own `models:` block — this must fall back through the chain to the
+  // top-level registry (own-first-then-ancestors, mirroring param scoping via parent envs).
+  const m = parseModel(`
+econeval: 1
+type: tree
+name: siblingScope
+models:
+  chronic:
+    type: markov
+    settings: {cycles: 3, start: well, correction: none}
+    params: {p_die: 0.1}
+    states:
+      well: {cost: 100, utility: 0.8}
+      dead: {cost: 0, utility: 0}
+    transitions:
+      well: {well: rest, dead: p_die}
+      dead: {dead: 1}
+  acute:
+    type: tree
+    tree:
+      R:
+        ToChronic: {p: 0.5, model: chronic}
+        Away: {p: rest, utility: 0}
+tree:
+  Root:
+    Only:
+      Leaf: {p: 1, model: acute}
+`);
+  const r = run(m, {});
+  // chronic alone (from earlier tests): cost 243.9, qaly 0.8*2.439 = 1.9512 per entrant.
+  // acute: 0.5 -> chronic, 0.5 -> a plain zero leaf.
+  close(r.strategies.Only.cost, 0.5 * 243.9);
+  close(r.strategies.Only.qaly, 0.5 * 1.9512);
+});
