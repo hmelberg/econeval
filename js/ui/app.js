@@ -12,6 +12,7 @@ import { createSync } from './sync.js';
 import { initPanels } from './panels.js';
 import { createCanvas } from './canvas.js';
 import { createInspector } from './inspector.js';
+import { createResults } from './results.js';
 import { layoutFor } from './layouts.js';
 import { createRegistry } from './files.js';
 
@@ -215,7 +216,7 @@ function renderYamlPane() {
 // ---------- Panels, canvas, inspector ----------
 // ================================================================================================
 
-initPanels();
+const panels = initPanels();
 
 const canvas = createCanvas(document.getElementById('canvas'), store, {
   layoutFor,
@@ -225,6 +226,44 @@ const canvas = createCanvas(document.getElementById('canvas'), store, {
 createInspector(document.getElementById('inspector-body'), document.getElementById('inspector-tabs'), store, {
   flush: sync.flush,
 });
+
+// selectOnCanvas is a stub for now (Validation tab has no click-through rows yet — Task 6 wires the
+// real inspector-focus behavior); still routes through store.select so it's never a true no-op.
+const results = createResults(document.getElementById('pane-results'), store, {
+  flush: sync.flush,
+  plotly: window.Plotly,
+  selectOnCanvas: (sel) => store.select(sel),
+});
+
+// ================================================================================================
+// ---------- Run (results drawer) ----------
+// ================================================================================================
+// #btn-run opens the results drawer (via panels' own toggle-results action, only if it's currently
+// closed — both the gate-error and success paths in results.js's runBase() end with the drawer
+// open, so it's simplest to just always ensure it's open here rather than have results.js reach
+// back into panels, which its module contract (paneEl, store, {flush, plotly, selectOnCanvas}) has
+// no room for). The actual run is deferred one tick (setTimeout 0) so the disabled/aria-busy state
+// set just below actually PAINTS before the sync run computation blocks the main thread — without
+// this, a fast run (typical case — no PSA involved) would set and clear "busy" within the same
+// frame, never visibly rendering it.
+
+const btnRun = document.getElementById('btn-run');
+
+function runModel() {
+  if (!panels.getState().results.open) panels.dispatch({ type: 'toggle-results' });
+  btnRun.disabled = true;
+  btnRun.setAttribute('aria-busy', 'true');
+  setTimeout(() => {
+    try {
+      results.runBase();
+    } finally {
+      btnRun.disabled = false;
+      btnRun.removeAttribute('aria-busy');
+    }
+  }, 0);
+}
+
+btnRun.addEventListener('click', runModel);
 
 // ================================================================================================
 // ---------- Store subscription: drives every render + the debounced autosave ----------
@@ -506,6 +545,13 @@ window.addEventListener('keydown', (e) => {
     return;
   }
 
+  if (key === 'enter') {
+    if (isTypingTarget(document.activeElement)) return; // brief: guarded, not while typing
+    e.preventDefault();
+    runModel();
+    return;
+  }
+
   if (key !== 'z' && key !== 'y') return;
   if (isTypingTarget(document.activeElement)) return;
 
@@ -527,4 +573,4 @@ window.addEventListener('beforeunload', (e) => {
 
 // Exposed only for the manual/e2e verification pass (never imported by any module) — lets a
 // browser console poke at live state without re-deriving it from the DOM.
-window.__econeval = { store, sync, canvas, reg };
+window.__econeval = { store, sync, canvas, reg, panels, results };

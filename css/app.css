@@ -631,6 +631,217 @@ button:active {
   color: var(--muted);
 }
 
+/* ---------- Results drawer (Task 4: results.js) ---------- */
+
+#pane-results {
+  position: relative; /* anchors .res-toast, mirroring #pane-canvas's own #canvas-toast */
+}
+
+/* #results-tabs holds the tab strip, the WTP/run-stamp header row, and the stale banner — all
+   built by results.js; index.html only declares the empty container. */
+#results-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.res-tabstrip {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 var(--sp-2);
+  gap: 2px;
+  border-bottom: 1px solid var(--line);
+}
+.res-tab {
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  padding: 0 var(--sp-2);
+  height: 100%;
+  font-size: var(--fs-1);
+  color: var(--muted);
+}
+.res-tab:hover {
+  color: var(--ink);
+  border-color: var(--line);
+}
+.res-tab[aria-selected="true"] {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.res-tab[hidden] {
+  display: none;
+}
+
+.res-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-1) var(--sp-3);
+}
+.res-wtp {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-1);
+  color: var(--muted);
+}
+.res-wtp-input {
+  width: 100px;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-1);
+}
+.res-wtp-input:hover {
+  border-color: var(--accent);
+}
+.res-stamp {
+  font-size: var(--fs-0);
+  color: var(--muted);
+  font-family: var(--font-data);
+  white-space: nowrap;
+}
+
+/* Deliberately muted (never --warn/--danger, both reserved for check() findings) — a stale-results
+   notice is a normal, expected state during editing, not a validation problem. */
+.res-stale {
+  padding: var(--sp-1) var(--sp-3);
+  font-size: var(--fs-1);
+  color: var(--muted);
+  background: var(--bg);
+  border-top: 1px solid var(--line);
+}
+.res-stale[hidden] {
+  display: none;
+}
+
+/* Gate-error notice — unlike .res-stale this genuinely reports a check() finding (the model has
+   errors), so it earns --danger, mirroring #canvas-toast's own error-toast styling exactly. */
+.res-toast {
+  position: absolute;
+  left: 50%;
+  bottom: var(--sp-3);
+  transform: translateX(-50%);
+  max-width: 80%;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--danger);
+  color: #fff;
+  font-size: var(--fs-1);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-pop);
+  z-index: 5;
+  pointer-events: none;
+}
+.res-toast[hidden] {
+  display: none;
+}
+
+#results-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  font-size: var(--fs-2);
+}
+
+.res-empty {
+  color: var(--muted);
+  font-size: var(--fs-1);
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* CEA table + Trace's "Show data" table share this. */
+.res-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: var(--sp-2);
+}
+.res-table th {
+  text-align: left;
+  font-size: var(--fs-0);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  font-weight: 400;
+  padding: 0 var(--sp-2) var(--sp-1);
+  border-bottom: 1px solid var(--line);
+}
+.res-table td {
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--line);
+}
+.res-table .res-num,
+.res-table th.res-num {
+  text-align: right;
+  font-family: var(--font-data);
+}
+.res-row-muted td {
+  color: var(--muted);
+}
+.res-chip {
+  display: inline-block;
+  font-size: var(--fs-0);
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 1px var(--sp-1);
+  white-space: nowrap;
+}
+.res-foot {
+  font-size: var(--fs-0);
+  color: var(--muted);
+  margin: 0;
+}
+
+/* Trace tab: select + chart fill remaining height, "Show data" sits below and scrolls with the
+   rest of #results-body. */
+.res-trace {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: var(--sp-2);
+}
+.res-trace-select {
+  flex: 0 0 auto;
+  font-size: var(--fs-1);
+  color: var(--muted);
+}
+.res-trace-select select {
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-1);
+}
+.res-chart {
+  flex: 1 1 auto;
+  min-height: 220px;
+  width: 100%;
+}
+.res-details {
+  flex: 0 0 auto;
+}
+.res-details summary {
+  cursor: pointer;
+  font-size: var(--fs-1);
+  color: var(--muted);
+  margin-bottom: var(--sp-1);
+}
+
 /* ---------- Dialogs ---------- */
 
 dialog {
