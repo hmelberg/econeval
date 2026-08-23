@@ -1,0 +1,278 @@
+/* econeval chrome — topbar, workspace grid, panels, splitters, buttons, dialogs.
+   Quiet cool-gray instrument chrome around a warm-paper canvas; dense 13px UI;
+   numbers in the mono data face. Dark mode via tokens.css only — no dark-specific
+   selectors here. */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;          /* no page scroll */
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: var(--fs-2);
+  -webkit-font-smoothing: antialiased;
+}
+
+button, input, textarea, select {
+  font-family: inherit;
+  color: inherit;
+}
+
+/* Focus ring on every interactive element (keyboard focus only). */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* ---------- Topbar ---------- */
+
+#topbar {
+  flex: 0 0 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-3);
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+#brand {
+  font-size: var(--fs-2);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+#model-name {
+  font-size: var(--fs-2);
+  color: var(--ink);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-sm);
+}
+#model-name[contenteditable="true"] {
+  outline: 1px dashed var(--line);
+}
+
+#type-badge {
+  font-size: var(--fs-0);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+#actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-left: auto;
+}
+
+/* ---------- Buttons ---------- */
+
+button {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--sp-1) var(--sp-3);
+  font-size: var(--fs-1);
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background-color 120ms, border-color 120ms;
+}
+button:hover {
+  border-color: var(--accent);
+}
+button:active {
+  background: var(--accent-soft);
+}
+
+#btn-save {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+#btn-save:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  opacity: .92;
+}
+
+#btn-yaml[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ---------- Workspace grid ---------- */
+
+#workspace {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: var(--w-yaml, 0px) 4px 1fr 4px var(--w-insp, 300px);
+  overflow: hidden;
+}
+
+/* ---------- Splitters ---------- */
+
+.splitter {
+  width: 4px;
+  height: 100%;
+  background: transparent;
+  cursor: col-resize;
+  transition: background-color 120ms;
+}
+.splitter:hover,
+.splitter:focus-visible {
+  background: var(--accent-soft);
+}
+
+/* ---------- Panels ---------- */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+
+/* Explicit — a [hidden] element inside a flex/grid ancestor can otherwise lose
+   to a later class rule (author cascade beats the UA [hidden] default). */
+#pane-yaml[hidden] { display: none; }
+
+.panel-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 32px;
+  padding: 0 var(--sp-3);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--fs-1);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.panel-ctl {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.panel-ctl button {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--fs-1);
+}
+
+/* ---------- YAML pane ---------- */
+
+#yaml-text {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  resize: none;
+  border: none;
+  outline: none;
+  padding: var(--sp-3);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-data);
+  font-size: var(--fs-1);
+  line-height: 1.5;
+}
+
+#yaml-error {
+  flex: 0 0 auto;
+  font-size: var(--fs-1);
+  color: var(--danger);
+  padding: var(--sp-2) var(--sp-3);
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+#yaml-error[hidden] { display: none; }
+
+/* ---------- Canvas pane chrome (ground itself styled in canvas.css) ---------- */
+
+#pane-canvas {
+  position: relative;
+}
+
+#canvas-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+#canvas-toolbar button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#breadcrumb {
+  flex: 0 0 auto;
+  font-size: var(--fs-1);
+  color: var(--muted);
+  padding: var(--sp-1) var(--sp-3);
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+#breadcrumb[hidden] { display: none; }
+
+/* ---------- Inspector ---------- */
+
+#inspector-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-3);
+  font-size: var(--fs-2);
+}
+
+/* ---------- Dialogs ---------- */
+
+dialog {
+  background: var(--surface);
+  color: var(--ink);
+  border: none;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+  padding: var(--sp-4);
+}
+dialog::backdrop {
+  background: rgba(0, 0, 0, .3);
+}
+
+/* ---------- Reduced motion ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
+}

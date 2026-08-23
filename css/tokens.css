@@ -1,0 +1,49 @@
+/* econeval design tokens — binding values, see docs/superpowers/plans/2026-08-23-phase2-editor.md
+   "Design tokens (binding; from the phase-2 design pass)" */
+
+:root {
+  color-scheme: light dark;
+
+  /* light */
+  --bg: #F3F4F6;         /* chrome behind panels */
+  --surface: #FFFFFF;    /* panels, topbar, dialogs */
+  --paper: #FDFDFB;      /* canvas ground */
+  --dot: #E3E2DC;        /* canvas dot grid */
+  --ink: #1A1D21;        /* text + node strokes */
+  --muted: #6B7280;
+  --line: #E2E4E8;       /* hairline borders */
+  --accent: #0E7A6E;     /* deep teal: selection, primary buttons, links */
+  --accent-soft: #E4F2F0;
+  --danger: #B42334;
+  --warn: #B45309;
+  --radius: 6px; --radius-sm: 4px;
+  --font-ui: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-data: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+  --fs-0: 11px; --fs-1: 12px; --fs-2: 13px; --fs-3: 15px; --fs-4: 18px;  /* base UI = --fs-2 */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px;   /* 8px rhythm */
+  --shadow-pop: 0 4px 16px rgba(0,0,0,.12);  /* dialogs/popovers only; panels are flat */
+}
+
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg:#131518; --surface:#1B1E23; --paper:#1F2328; --dot:#2A2F36; --ink:#E7E9EC;
+  --muted:#9AA1AA; --line:#2A2E34; --accent:#2FA795; --accent-soft:#16332F;
+  --danger:#E5484D; --warn:#D97706; --shadow-pop: 0 4px 16px rgba(0,0,0,.5);
+}}
+
+:root[data-theme="dark"] {
+  --bg: #131518;
+  --surface: #1B1E23;
+  --paper: #1F2328;
+  --dot: #2A2F36;
+  --ink: #E7E9EC;
+  --muted: #9AA1AA;
+  --line: #2A2E34;
+  --accent: #2FA795;
+  --accent-soft: #16332F;
+  --danger: #E5484D;
+  --warn: #D97706;
+  --shadow-pop: 0 4px 16px rgba(0,0,0,.5);
+}
+
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
