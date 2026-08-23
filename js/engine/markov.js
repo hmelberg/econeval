@@ -318,6 +318,20 @@ export function runMarkov(model, env, { discount = {}, delayYears = 0 } = {}) {
   const { cycles, cycleYears, correction, start, age } = model.settings;
   const stateNamesOrig = model.states.map((s) => s.name);
 
+  // Guard (unconditional — not only when a tunnel is actually in use): TUNNEL_SEP is used
+  // internally to build tunnel-copy names (`${origName}${TUNNEL_SEP}${k}`) and nothing stops a
+  // document's own state name from containing that same character (model.js places no character
+  // restriction on state names) — an unguarded collision would silently clobber `newRows`/
+  // `collapse`/`compiledByState` entries during expandStateTime and produce silently wrong
+  // occupancy with no error. Fail loud instead.
+  for (const name of stateNamesOrig) {
+    if (name.includes(TUNNEL_SEP))
+      throw new MarkovError(
+        `states.${name}: state names may not contain U+E000 — that character is reserved internally for state_time tunnel expansion`,
+        { path: `states.${name}` }
+      );
+  }
+
   const rows0 = compileRows(model);
   for (const name of stateNamesOrig) {
     if (!rows0[name])

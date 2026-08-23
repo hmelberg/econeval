@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseModel } from '../js/core/model.js';
+import { parseModel, normalizeModel } from '../js/core/model.js';
 import { makeEnv } from '../js/engine/resolve.js';
 import { runMarkov } from '../js/engine/markov.js';
 
@@ -69,4 +69,25 @@ transitions:
 `);
   const r = runMarkov(m, makeEnv(m, {}), { discount: { cost: 0, effect: 0 } });
   close(r.totals.cost, 100 * (1 + 2 + 3));
+});
+
+// Regression (review finding): TUNNEL_SEP (U+E000) is used internally to build tunnel-copy names
+// (`${origName}${TUNNEL_SEP}${k}`); model.js places no character restriction on state names, so
+// an unguarded collision would silently clobber internal bookkeeping. runMarkov must refuse any
+// model whose OWN state name contains the reserved character — unconditionally, even if no state
+// actually needs a state_time tunnel (this fixture doesn't reference state_time at all).
+test('state names containing the reserved tunnel separator (U+E000) throw', () => {
+  const bad = 'sick1';
+  const m = normalizeModel({
+    econeval: 1,
+    type: 'markov',
+    name: 'reserved',
+    settings: { cycles: 2, start: bad },
+    states: { [bad]: { utility: 1 } },
+    transitions: { [bad]: { [bad]: 1 } },
+  });
+  assert.throws(
+    () => runMarkov(m, makeEnv(m, {}), { discount: { cost: 0, effect: 0 } }),
+    /reserved/
+  );
 });
