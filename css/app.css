@@ -327,6 +327,247 @@ button:active {
   font-size: var(--fs-2);
 }
 
+/* Tab strip (js/ui/inspector.js's #insp-tabs-own, inserted as the first child of #inspector-tabs
+   — panels.js's own .panel-ctl maximize/minimize span is the OTHER child; space-between puts tabs
+   on the left, panel controls on the right, regardless of which module wires up first). */
+.insp-tabstrip {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  gap: 2px;
+  margin-left: calc(var(--sp-3) * -1);
+  min-width: 0;
+  overflow: hidden;
+}
+.insp-tab {
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  padding: 0 var(--sp-2);
+  height: 100%;
+  font-size: var(--fs-1);
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--muted);
+}
+.insp-tab:hover {
+  color: var(--ink);
+  border-color: var(--line);
+}
+.insp-tab[aria-selected="true"] {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.insp-findings-badge {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-left: var(--sp-2);
+}
+.insp-badge {
+  font-size: var(--fs-0);
+  font-family: var(--font-data);
+  padding: 1px var(--sp-1);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+.insp-badge-error {
+  background: var(--danger);
+  color: #fff;
+}
+.insp-badge-warn {
+  background: var(--warn);
+  color: #fff;
+}
+
+/* ---------- Inspector: shared field styles ---------- */
+
+.insp-empty,
+.insp-hint {
+  color: var(--muted);
+  font-size: var(--fs-1);
+  line-height: 1.5;
+  margin: 0 0 var(--sp-3);
+}
+
+.insp-subhead {
+  font-size: var(--fs-0);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  margin: var(--sp-3) 0 var(--sp-1);
+}
+
+.insp-row {
+  margin-bottom: var(--sp-3);
+}
+.insp-row-label {
+  display: block;
+  font-size: var(--fs-1);
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+.insp-row-label > input,
+.insp-row-label > select {
+  display: block;
+  width: 100%;
+}
+.insp-row > input,
+.insp-row > select {
+  width: 100%;
+}
+.insp-type-badge {
+  display: inline-block;
+  font-size: var(--fs-0);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 1px var(--sp-1);
+}
+
+#inspector-body input[type="text"],
+#inspector-body select {
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-2);
+}
+#inspector-body input[type="text"]:hover,
+#inspector-body select:hover {
+  border-color: var(--accent);
+}
+.insp-font-data {
+  font-family: var(--font-data);
+}
+.insp-field-invalid {
+  border-color: var(--danger) !important;
+}
+.insp-field-error {
+  font-size: var(--fs-0);
+  color: var(--danger);
+  margin-top: 2px;
+}
+.insp-field-error.insp-lvl-warn {
+  color: var(--warn);
+}
+.insp-field-error[hidden] {
+  display: none;
+}
+
+.insp-add-row {
+  font-size: var(--fs-1);
+  margin-top: var(--sp-1);
+}
+
+/* Payoffs / with-overrides: key + value + remove, one row each. */
+.insp-kv-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.insp-kv-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  grid-template-areas: "key val rm" "err err err";
+  gap: var(--sp-1);
+  align-items: center;
+}
+.insp-kv-row > .insp-kv-key { grid-area: key; }
+.insp-kv-row > .insp-kv-val { grid-area: val; }
+.insp-kv-row > .insp-remove-btn { grid-area: rm; }
+.insp-kv-row > .insp-field-error { grid-area: err; margin-top: 0; }
+.insp-kv-row > .insp-field-error[hidden] { display: none; }
+
+.insp-remove-btn {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  color: var(--muted);
+}
+.insp-remove-btn:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+/* Parameters table */
+.insp-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: var(--sp-2);
+}
+.insp-table th {
+  text-align: left;
+  font-size: var(--fs-0);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  font-weight: 400;
+  padding: 0 var(--sp-1) var(--sp-1);
+  border-bottom: 1px solid var(--line);
+}
+.insp-table td {
+  padding: var(--sp-1);
+  vertical-align: top;
+}
+.insp-table input[type="text"] {
+  width: 100%;
+}
+.insp-table .insp-col-del {
+  width: 24px;
+}
+
+/* "Model findings" — findings whose path doesn't match a currently-rendered field. */
+.insp-model-findings {
+  margin-top: var(--sp-4);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--line);
+}
+.insp-model-findings[hidden] {
+  display: none;
+}
+.insp-model-findings-head {
+  font-size: var(--fs-0);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  margin-bottom: var(--sp-2);
+}
+.insp-model-findings-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.insp-model-findings-list li {
+  font-size: var(--fs-1);
+  line-height: 1.5;
+  padding-left: var(--sp-2);
+  border-left: 2px solid var(--line);
+}
+.insp-model-findings-list li.insp-lvl-error {
+  border-left-color: var(--danger);
+}
+.insp-model-findings-list li.insp-lvl-warn {
+  border-left-color: var(--warn);
+}
+.insp-model-findings-list code {
+  font-family: var(--font-data);
+  font-size: var(--fs-0);
+  color: var(--muted);
+}
+
 /* ---------- Dialogs ---------- */
 
 dialog {
