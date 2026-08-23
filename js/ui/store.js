@@ -46,7 +46,17 @@ export function createStore(initialText) {
   const listeners = new Set();
 
   function notify() {
-    for (const listener of listeners) listener();
+    // Isolate subscribers from each other: a throwing listener (a bug in one panel's wiring)
+    // must not suppress the remaining listeners, nor propagate out of a mutator that has already
+    // committed successfully. "Errors surfaced, never swallowed" (constraints.md) is about
+    // user/model errors — not about letting a broken subscriber crash sibling panes.
+    for (const listener of listeners) {
+      try {
+        listener();
+      } catch (err) {
+        console.error('store listener failed', err);
+      }
+    }
   }
 
   function reconcileSelection(newModel) {
@@ -88,6 +98,11 @@ export function createStore(initialText) {
         text = newText;
         parseError = e;
         dirty = true;
+        // A bad edit invalidates redo too — not just "no new undo snapshot". If it didn't, a
+        // stale redoStack entry (from before this edit) could later be pushed onto undoStack by
+        // redo(), and an undo() after that would try to re-parse an unvalidated snapshot and
+        // throw uncaught. Any setText call, good or bad, is "a new change" for redo purposes.
+        redoStack = [];
         notify();
         return;
       }
@@ -97,7 +112,13 @@ export function createStore(initialText) {
     applyOp(fn, _opts) {
       const newModel = fn(model); // throws propagate untouched — nothing below has run yet
       const newText = serializeModel(newModel);
-      commit(newText, newModel);
+      // Enforce the snapshots-good invariant at the source: commit the model reparsed FROM the
+      // serialized text, not fn's raw return. This guarantees every undo/redo snapshot really
+      // does round-trip (catches op/serializer drift here, not as a later undo() surprise), and
+      // matches the throwing-fn contract — if the reparse throws, nothing has been committed yet,
+      // so the store is left untouched and the error propagates to the caller.
+      const reparsed = parseModel(newText);
+      commit(newText, reparsed);
     },
 
     select(sel) {

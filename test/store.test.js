@@ -172,3 +172,73 @@ test('markSaved clears dirty', () => {
   store.markSaved();
   assert.equal(store.get().dirty, false);
 });
+
+// --- Review fixes: critical + important issues found in the task-5 review. ---
+
+test('a bad setText clears redoStack too, so a later redo/undo cannot crash on corrupted history', () => {
+  // Reproduces the reported crash sequence exactly: applyOp -> undo -> setText(bad) -> redo ->
+  // undo. Before the fix, setText's failure branch left a stale redoStack entry in place; redo()
+  // would then push the BAD text onto undoStack, and the final undo() would try to re-parse it
+  // and throw an uncaught ModelError. (Without the intervening redo() call this sequence never
+  // reproduces the crash at all — undo() on an empty stack is always a safe no-op — so the redo()
+  // call is included here even though it isn't spelled out step-by-step in the ticket.)
+  const store = createStore(GOOD);
+  store.applyOp((m) => ops.addState(m));
+  store.undo(); // back to GOOD; redoStack now holds the post-addState text
+  assert.equal(store.get().canRedo, true);
+
+  store.setText('not: valid: yaml: [');
+  assert.equal(store.get().canRedo, false); // the direct regression check: ANY setText clears redo
+
+  assert.doesNotThrow(() => store.redo()); // no-op: redoStack is empty
+  assert.doesNotThrow(() => store.undo()); // no-op: undoStack is empty too — this used to throw
+
+  const s = store.get();
+  assert.equal(s.text, 'not: valid: yaml: ['); // the bad buffer is still shown verbatim (existing contract)
+  assert.ok(s.parseError);
+  // The last-good MODEL is unaffected by the whole redo()/undo() detour: still the pre-bad-edit
+  // model (no 'state1' — that was undone before the bad edit was ever typed).
+  assert.equal(s.model.states.some((st) => st.name === 'state1'), false);
+});
+
+test('a throwing subscriber does not suppress other subscribers or break the mutation', () => {
+  const store = createStore(GOOD);
+  const originalConsoleError = console.error;
+  const loggedErrors = [];
+  console.error = (...args) => { loggedErrors.push(args); };
+  try {
+    let secondCalled = false;
+    store.subscribe(() => { throw new Error('boom'); });
+    store.subscribe(() => { secondCalled = true; });
+
+    assert.doesNotThrow(() => store.applyOp((m) => ops.addState(m)));
+    assert.equal(secondCalled, true);
+    assert.equal(loggedErrors.length, 1);
+    assert.equal(loggedErrors[0][0], 'store listener failed');
+  } finally {
+    console.error = originalConsoleError;
+  }
+});
+
+test('applyOp commits the model reparsed from the serialized text, catching op/serializer drift', () => {
+  // A hand-crafted "op" that produces a structurally-valid Model whose serialized text is
+  // rejected on reparse: a payoff value with unbalanced parentheses passes straight through
+  // serializeModel (it does no expression/paren validation) but trips normStates's
+  // unbalanced-parens guard when the store reparses the text it just produced.
+  const store = createStore(GOOD);
+  const before = store.get();
+  const brokenFn = (m) => {
+    const m2 = structuredClone(m);
+    m2.states.find((s) => s.name === 'well').payoffs.cost = 'lookup(x, y';
+    return m2;
+  };
+  assert.throws(() => store.applyOp(brokenFn), /unbalanced parentheses/);
+  assert.deepEqual(store.get(), before); // untouched, same as a throwing fn
+});
+
+test('applyOp: the committed model equals parseModel(serializeModel(fn(model))) for a normal op', () => {
+  const store = createStore(GOOD);
+  store.applyOp((m) => ops.addState(m));
+  const s = store.get();
+  assert.deepEqual(s.model, parseModel(serializeModel(s.model)));
+});
