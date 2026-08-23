@@ -139,6 +139,44 @@ test('structural errors: missing name/cycles/states, unknown type', () => {
   assert.throws(() => parseModel('econeval: 1\ntype: markov\nname: x\nsettings: {cycles: 1}'), /states/);
 });
 
+test('flow-comma mistake in a transition row gets a targeted hint', () => {
+  const bad = `
+econeval: 1
+type: markov
+name: x
+settings: {cycles: 1}
+states:
+  alive: {utility: 1}
+  dead: {utility: 0}
+transitions:
+  alive: {alive: rest, dead: lookup(mort, age)}
+  dead: {dead: 1}
+`;
+  try { parseModel(bad); assert.fail('should throw'); }
+  catch (err) {
+    assert.ok(err instanceof ModelError);
+    assert.match(err.hint ?? '', /quote|block style/i);
+  }
+});
+
+test('flow-comma mistake in a state payoff gets a targeted hint', () => {
+  const bad = `
+econeval: 1
+type: markov
+name: x
+settings: {cycles: 1}
+states:
+  a: {cost: 100, utility: lookup(qol, age)}
+transitions:
+  a: {a: 1}
+`;
+  try { parseModel(bad); assert.fail('should throw'); }
+  catch (err) {
+    assert.ok(err instanceof ModelError);
+    assert.match(err.hint ?? '', /quote|block style/i);
+  }
+});
+
 test('params must be a mapping, not e.g. a bare string', () => {
   assert.throws(() => parseModel(`
 econeval: 1

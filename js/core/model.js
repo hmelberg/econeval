@@ -53,6 +53,14 @@ function normStates(raw) {
       else if (k === 'notes') notes = val;
       else payoffs[k] = val;
     }
+    // Same FLOW_HINT protection as normParam: a flow-style row like `{cost: 100, utility:
+    // lookup(qol, age)}` has its comma-bearing call silently split by js-yaml into extra bogus
+    // entries — surfaced here as an unbalanced-parens payoff value instead of an opaque later
+    // failure (e.g. `compile(null)` resolving to an "unknown name: null" error far from the cause).
+    for (const [k, val] of Object.entries(payoffs)) {
+      if (unbalanced(val))
+        throw new ModelError(`states.${name}.${k}: unbalanced parentheses`, { hint: FLOW_HINT, path: `states.${name}.${k}` });
+    }
     const state = { name, payoffs };
     if (source !== undefined) state.source = source;
     if (notes !== undefined) state.notes = notes;
@@ -86,18 +94,30 @@ function normTransitions(raw) {
 
     const to = {};
     for (const [target, v] of Object.entries(row)) {
+      // Same FLOW_HINT protection as normParam/normStates: a flow-style row like `{alive: rest,
+      // dead: lookup(mort, age)}` has its comma-bearing call silently split by js-yaml into extra
+      // bogus entries — the checks below surface that as an unbalanced-parens value with a
+      // targeted hint, at whichever entry the split first breaks (the plain scalar branch, the
+      // per-target mapping's own fields, or the resulting bogus extra key/'invalid value' branch).
       if (typeof v === 'number' || typeof v === 'string') {
+        if (unbalanced(v))
+          throw new ModelError(`transitions.${from}.${target}: unbalanced parentheses`, { hint: FLOW_HINT, path: `transitions.${from}.${target}` });
         to[target] = { p: v };
       } else if (typeof v === 'object' && v !== null && !Array.isArray(v)) {
         const entry = {};
         for (const k of Object.keys(v)) {
-          if (!TRANSITION_KEYS.has(k))
-            throw new ModelError(`transitions.${from}.${target}: unknown field '${k}'`, { path: `transitions.${from}.${target}` });
+          if (!TRANSITION_KEYS.has(k)) {
+            const hint = (unbalanced(k) || Object.values(v).some(unbalanced)) ? FLOW_HINT : undefined;
+            throw new ModelError(`transitions.${from}.${target}: unknown field '${k}'`, { hint, path: `transitions.${from}.${target}` });
+          }
           entry[k] = v[k];
         }
+        if (unbalanced(entry.p) || unbalanced(entry.cost) || unbalanced(entry.utility))
+          throw new ModelError(`transitions.${from}.${target}: unbalanced parentheses`, { hint: FLOW_HINT, path: `transitions.${from}.${target}` });
         to[target] = entry;
       } else {
-        throw new ModelError(`transitions.${from}.${target}: invalid value`, { path: `transitions.${from}.${target}` });
+        const hint = (unbalanced(target) || Object.values(row).some(unbalanced)) ? FLOW_HINT : undefined;
+        throw new ModelError(`transitions.${from}.${target}: invalid value`, { hint, path: `transitions.${from}.${target}` });
       }
     }
     out[from] = { type: 'p', to };
