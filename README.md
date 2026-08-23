@@ -3,10 +3,10 @@
 Health economic evaluation in the browser: decision trees and Markov models with a
 declarative YAML model format. Spec: `docs/superpowers/specs/2026-08-23-econeval-design.md`.
 
-Status: phase 1 (compute core) and phase 2 (editor) are both complete, covered by `npm test`
-(274 tests), including two golden examples cross-checked against independent reference
-implementations (`test/golden.test.js`). The editor is a browser-based canvas + YAML editor
-for the same model format the compute core runs:
+Status: phase 1 (compute core), phase 2 (editor), and phase 3 (results) are all complete,
+covered by `npm test` (388 tests), including two golden examples cross-checked against
+independent reference implementations (`test/golden.test.js`). The editor is a browser-based
+canvas + YAML editor for the same model format the compute core runs:
 
 - **Two-way YAML sync** — a live document store (undo/redo, selection) with a debounced YAML
   textarea; edits from either side (canvas, inspector, or hand-typed YAML) stay in sync, and
@@ -16,15 +16,20 @@ for the same model format the compute core runs:
   Connect/Delete gesture tools, including sub-model drill-in with a breadcrumb trail.
 - **Inspector** — Selection/Parameters/Settings tabs with inline expression validation and
   live `check()` findings (a tab-strip badge plus per-field and whole-model messages).
-  Flexible panels (yaml/canvas/inspector) resize, maximize, and minimize, with layout
+- **Results** — a Run button (or Ctrl/Cmd+Enter) computes CEA/Trace/Tornado/PSA/Validation
+  into a drawer at the bottom of the workspace; see Analyses below for what each tab shows.
+  A stale banner appears the moment the model changes underneath a computed result.
+  Flexible panels (yaml/canvas/inspector/results) resize, maximize, and minimize, with layout
   persisted across reloads.
 - **Files** — versioned local-storage model registry (up to 20 versions per model), autosave
   every second with restore-on-reload, an Examples menu (the two models below), and
   YAML Import/Export.
-- Light/dark theme follows the OS preference (or an explicit `data-theme` override).
+- Light/dark theme follows the OS preference (or an explicit `data-theme` override); charts
+  re-theme in place when it changes.
 
-Run `npm test` for the full suite (phase 1's compute core + phase 2's editor, both DOM-free
-logic and pure-function coverage for the DOM-heavy modules).
+Run `npm test` for the full suite (phase 1's compute core, phase 2's editor, and phase 3's
+results layer — DOM-free logic and pure-function coverage for the DOM-heavy modules; chart
+rendering itself is verified by recorded browser passes, not unit tests).
 
 ## Run locally
 
@@ -154,15 +159,37 @@ tree:
 
 ### Analyses
 
-- **CEA** — per-strategy cost/QALY totals, incremental table with dominance and extended
-  dominance, ICER, net monetary benefit at a willingness-to-pay threshold.
-- **DSA** — one-way sensitivity (tornado on incremental NMB) and two-way grids.
-- **PSA** — seeded probabilistic sampling over every `dist`-bearing param, with optional
-  Gaussian-copula correlations between params. v1 semantics: global params draw once per
-  iteration and are shared everywhere; a sub-model's own dist-bearing params draw
-  independently per attachment (route through a global param via `with:` to share them).
-- **CEAC** — cost-effectiveness acceptability curves derived from the PSA sample.
-- **EVPI** — expected value of perfect information, also derived from the PSA sample.
+Press **Run** to compute results into the drawer at the bottom of the workspace, five tabs:
+
+- **CEA** — per-strategy cost/QALY totals and an incremental table with dominance and
+  extended dominance, ICER, and net monetary benefit (NMB) at the willingness-to-pay
+  threshold. The **WTP** field lives in the drawer's header and applies immediately to NMB
+  and the CEAC/EVPI charts — no re-run needed, since it's a threshold on already-computed
+  results, not a model input.
+- **Trace** — the cohort's cycle-by-cycle state occupancy for a Markov model, one series per
+  state. Not shown for decision trees, which have no cycles to trace.
+- **Tornado** — one-way sensitivity on incremental NMB, swept from each param's `low`/`high`
+  bounds (`dsa.oneWay`). Needs at least two strategies and at least one top-level param
+  carrying both bounds; otherwise the tab explains what's missing instead of rendering.
+- **PSA** — an explicit **Run PSA** button (separate from the main Run, since sampling is
+  the expensive step) draws `settings.psa.n` iterations over every `dist`-bearing param,
+  seeded by `settings.psa.seed` — the same seed always reproduces the same draws, so a PSA
+  run is a deterministic, shareable result, not a one-off random sample. Produces the
+  cost-effectiveness plane, the CEAC (probability each strategy is cost-effective, swept
+  over WTP), and EVPI (expected value of perfect information), each with a "Show data"
+  table. PSA also supports optional Gaussian-copula correlations between params; v1
+  semantics: global params draw once per iteration and are shared everywhere, while a
+  sub-model's own dist-bearing params draw independently per attachment (route through a
+  global param via `with:` to share them).
+- **Validation** — every `check()` finding, errors and warnings, each one clickable to
+  select the offending state/branch/param on the canvas and focus it in the inspector.
+
+A stale banner ("Results are stale — Run again.") appears the moment the model changes
+underneath a computed result — CEA/Trace and PSA are tracked independently, so editing the
+model after a PSA run flags PSA as stale even if you press Run again for CEA/Trace.
+
+The compute core underneath also exposes two-way DSA grids (`js/analysis/dsa.js`'s
+`twoWay`), not yet surfaced as a chart in the drawer.
 
 See the full format spec at `docs/superpowers/specs/2026-08-23-econeval-design.md` for the
 expression language, distributions, transition-reward and sub-model composition rules, and
