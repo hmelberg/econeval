@@ -65,3 +65,37 @@ export function parseWtpInput(raw, lastGood) {
   const n = Number(trimmed);
   return Number.isFinite(n) ? n : lastGood;
 }
+
+// Task 5 (Tornado + PSA tabs): wtpMax fed into analyses.js's psaDerived() for the PSA tab's
+// CEAC/EVPI x-axis range. Controller ruling: 2.5x whichever WTP is authoritative right now — the
+// model's own `settings.wtp` (its author's stated willingness-to-pay) when set, else the CEA
+// header's current WTP value (what the user is actually looking at), else a flat 100000 when
+// neither is available (deliberately the same number psaDerived() itself falls back to, so the
+// two stay in sync even though this function computes the value explicitly rather than relying on
+// that default). This is results.js's job, not analyses.js's — psaDerived is pure over an
+// already-computed psaResult and has no model in scope to read settings.wtp from.
+export function computeWtpMax(settingsWtp, headerWtp) {
+  const base =
+    settingsWtp !== null && settingsWtp !== undefined ? settingsWtp
+    : headerWtp !== null && headerWtp !== undefined ? headerWtp
+    : null;
+  return base !== null ? 2.5 * base : 100000;
+}
+
+// "Run PSA (n=1000)" — the PSA tab's own explicit run-button label. PSA is the only potentially
+// slow analysis in this app (a full probabilistic sweep, `n` draws), so it never runs implicitly
+// off the global Run button; the label always states exactly how many draws a click commits to.
+export function psaRunLabel(n) {
+  return `Run PSA (n=${n})`;
+}
+
+// "PSA · n=1000 · 842ms · 14:32" — mirrors formatRunStamp's own "Run · ... · HH:MM" shape, plus
+// the draw count and wall-clock timing of the run that produced the currently-shown PSA charts
+// (PSA is explicit/synchronous — see module doc in results.js — so this is worth surfacing).
+// `elapsedMs` is rounded to the nearest whole millisecond for display; `date` is an injected Date
+// (real callers pass `new Date(ts)`; tests pass a fixed instance), keeping this pure/deterministic.
+export function formatPsaStamp(n, elapsedMs, date) {
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mm = String(date.getMinutes()).padStart(2, '0');
+  return `PSA · n=${n} · ${Math.round(elapsedMs)}ms · ${hh}:${mm}`;
+}

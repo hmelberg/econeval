@@ -1,5 +1,35 @@
-// Results drawer: CEA + Trace tabs (Tornado/PSA content lands Task 5; Validation content lands
-// Task 6 — both are wired here only as empty-state placeholders so the tab strip is complete now).
+// Results drawer: CEA + Trace + Tornado + PSA tabs (Validation content lands Task 6 — it is wired
+// here only as an empty-state placeholder so the tab strip is complete now).
+//
+// Tornado (Task 5): pure function of the LIVE current model (store.get().model), never a frozen
+// snapshot — it has no "stale" state of its own (unlike CEA/Trace/PSA, which all read from a
+// frozen `lastRun`/`lastPsa` and participate in the text-comparison stale banner). It re-runs
+// runTornado() on every tab-open, every a/b comparator change, and every WTP commit (ΔNMB depends
+// on wtp) — cheap enough (2*nParams+1 run() calls) that there is no separate "Run Tornado" button,
+// unlike PSA. `tornadoA`/`tornadoB` persist across tab switches (closure state), defaulting to the
+// first two strategies in DECLARATION order and re-clamped to the live strategy list on every
+// render (so switching to a model with different/fewer strategies never leaves a dangling
+// selection). Strategy names for the two <select>s are derived locally (see `strategyNamesOf`
+// below — a deliberate small duplicate of analyses.js's own private helper of the same name,
+// avoiding both a public-contract change to analyses.js and an extra throwaway run() call just to
+// learn names).
+//
+// PSA (Task 5): the ONE potentially-slow analysis in this app, so — unlike Tornado — it never runs
+// implicitly. `lastPsa` (`{psaResult, text, ts, elapsedMs, n, seed}`) is a frozen snapshot,
+// populated only by an explicit "Run PSA (n=N)" button click (see `runPsaNow`), and is NOT cleared
+// or re-triggered by the global Run/`runNow()` — pressing the main Run button re-runs the base
+// CEA, full stop; PSA keeps showing its last computed result until its own button is pressed again
+// or the model changes underneath it. That means `lastPsa.text` can drift out of sync with
+// `lastRun.text` (e.g.: run PSA, edit the model, press the global Run again — CEA's staleness
+// clears but PSA's does not) — `renderStaleBanner()` checks BOTH snapshots independently and the
+// one shared `.res-stale` banner fires if EITHER is out of sync with the live text, per the task
+// brief ("a stale PSA shows the banner too"). Once `lastPsa` exists, everything else — the
+// comparator select, the CE-plane/CEAC/EVPI specs, `wtpMax` — is recomputed FRESH on every render
+// from the cached `psaResult` via the pure `psaDerived()` (no engine re-run): switching the
+// comparator only ever calls `psaDerived()` again, never `runPsa()` again. `strategyIndex` for the
+// PSA charts is built fresh each render from `psaResult.strategies` (declaration order, exactly
+// like `buildStrategyIndex(lastRun.strategies)` elsewhere) — PSA has no dependency on `lastRun`
+// ever having succeeded at all.
 //
 // createResults(paneEl, store, {flush, plotly, selectOnCanvas}) -> {render(), runBase(), openTab(t)}
 //   paneEl: #pane-results — this module finds #results-tabs/#results-body inside it itself (the
@@ -74,19 +104,21 @@
 // tabs must follow the same "new chart -> mountChart(el, spec); in-place re-render -> bare
 // `plotly.react(...).catch(() => {})`" split — `purgeCharts()`/`renderBody()` need no per-tab changes.
 //
-// Extending the tab registry (T5/T6): `TABS` (id + label, tab STRIP only) and `TAB_RENDERERS` (id
-// -> () => void, called with bodyEl already cleared) are the two lists to touch. Add a tab: push
-// onto TABS (grows the strip) and add its renderer to TAB_RENDERERS (replace the tornado/psa/
-// validation placeholder entries here with real content) — `openTab`/`renderTabStrip`/`renderBody`
-// need no changes for a same-shape addition. `renderTabStrip`'s per-button `hidden` rule is
-// Trace-specific (markov-only) — a future conditionally-hidden tab would add its own branch there
-// the same way.
+// Extending the tab registry (T6 — Validation is still the one placeholder left): `TABS` (id +
+// label, tab STRIP only) and `TAB_RENDERERS` (id -> () => void, called with bodyEl already
+// cleared) are the two lists to touch. Add a tab, or replace the validation placeholder entry with
+// real content: `openTab`/`renderTabStrip`/`renderBody` need no changes for a same-shape addition.
+// `renderTabStrip`'s per-button `hidden` rule is Trace-specific (markov-only) — a future
+// conditionally-hidden tab would add its own branch there the same way.
 
-import { gate, runBase, traceFor } from './analyses.js';
+import { gate, runBase, traceFor, availability, runTornado, runPsa, psaDerived } from './analyses.js';
 import { cea } from '../analysis/cea.js';
-import { readChartTheme, buildTraceSpec } from './charts.js';
+import {
+  readChartTheme, buildTraceSpec, buildTornadoSpec, buildCEPlaneSpec, buildCEACSpec, buildEVPISpec,
+} from './charts.js';
 import {
   formatMoney, format4, formatIcer, statusLabel, formatRunStamp, buildStrategyIndex, parseWtpInput,
+  computeWtpMax, psaRunLabel, formatPsaStamp,
 } from './results-format.js';
 
 // ================================================================================================
@@ -130,11 +162,27 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
 
   let lastRun = null;          // {results, ceaRows, strategies, strategyIndex, wtp, text, ts}
   let lastGateErrors = null;   // Finding[] | null — from the most recent FAILED gate() call
+  let lastPsa = null;          // {psaResult, text, ts, elapsedMs, n, seed} | null — see module doc
   let activeTab = 'cea';
   let selectedTraceStrategy = null;
+  let tornadoA = null;         // Tornado's own a/b comparator selections — persist across renders
+  let tornadoB = null;
+  let psaComparator = null;    // PSA's own comparator selection — persists across renders
   let activeChartRenderer = null; // () => void, re-invoked on a theme change; see module doc above
   let toastTimer = null;
   const chartRegistry = new Set(); // live chart-bearing DOM elements; see purgeCharts()/module doc
+
+  // Mirrors analyses.js's own PRIVATE strategyNamesOf(model) exactly (markov -> Object.keys
+  // (model.strategies); tree -> its root's children names, NOT model.strategies — see that
+  // module's comment). Duplicated here (not exported from analyses.js) so the Tornado tab's two
+  // comparator <select>s can list strategy names without widening analyses.js's public contract
+  // and without paying for a throwaway run() just to learn names (runBase() would otherwise be the
+  // only way to get this list).
+  function strategyNamesOf(model) {
+    if (model.type === 'markov') return Object.keys(model.strategies);
+    if (model.type === 'tree') return (model.tree?.children ?? []).map((c) => c.name);
+    return [];
+  }
 
   function isMarkovNow() {
     return store.get().model?.type === 'markov';
@@ -200,9 +248,11 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
     const n = parseWtpInput(wtpInput.value, lastGoodWtp);
     lastGoodWtp = n;
     wtpInput.value = String(n);
-    if (!lastRun) return; // nothing to re-derive yet — the value is simply remembered for the next run
-    recomputeCea(n);
-    if (activeTab === 'cea') renderBody();
+    if (lastRun) recomputeCea(n);
+    // Tornado's ΔNMB depends on wtp too (see renderTornadoTab, which reads lastGoodWtp fresh on
+    // every call) — unlike CEA, it needs no lastRun at all, so it re-renders here independent of
+    // whether a base run has ever happened.
+    if (activeTab === 'cea' || activeTab === 'tornado') renderBody();
   }
   wtpInput.addEventListener('change', commitWtp);
   wtpInput.addEventListener('keydown', (e) => {
@@ -227,7 +277,12 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
   }
 
   function renderStaleBanner() {
-    const stale = !!lastRun && store.get().text !== lastRun.text;
+    // Task 5: PSA carries its OWN snapshot (lastPsa.text), independent of lastRun.text — a global
+    // Run does not touch/clear it (see module doc). The one shared banner fires if EITHER snapshot
+    // is out of sync with the live text, so a stale PSA is flagged even while lastRun itself is
+    // fresh (run PSA, edit the model, press Run again — CEA's staleness clears, PSA's does not).
+    const text = store.get().text;
+    const stale = (!!lastRun && text !== lastRun.text) || (!!lastPsa && text !== lastPsa.text);
     staleEl.hidden = !stale;
   }
 
@@ -334,6 +389,274 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
     bodyEl.appendChild(wrap);
   }
 
+  // ---------- Tornado tab (Task 5) — see module doc for the "live model, no snapshot" design ----------
+
+  function buildTornadoDetails(bars) {
+    const det = h('details', { class: 'res-details' });
+    det.appendChild(h('summary', {}, 'Show data'));
+    const table = h('table', { class: 'res-table' });
+    table.appendChild(h('thead', {}, h('tr', {},
+      h('th', {}, 'Parameter'), h('th', { class: 'res-num' }, 'Low'), h('th', { class: 'res-num' }, 'High'),
+      h('th', { class: 'res-num' }, 'ΔNMB @ low'), h('th', { class: 'res-num' }, 'ΔNMB @ high'),
+    )));
+    const tbody = h('tbody');
+    for (const b of bars) {
+      tbody.appendChild(h('tr', {},
+        h('td', {}, b.param),
+        h('td', { class: 'res-num' }, format4(b.low)),
+        h('td', { class: 'res-num' }, format4(b.high)),
+        h('td', { class: 'res-num' }, formatMoney(b.lowValue)),
+        h('td', { class: 'res-num' }, formatMoney(b.highValue)),
+      ));
+    }
+    table.appendChild(tbody);
+    det.appendChild(table);
+    return det;
+  }
+
+  function renderTornadoTab() {
+    const { model, parseError } = store.get();
+    if (parseError || !model) { renderPlaceholder('Fix the YAML error to see the Tornado analysis.'); return; }
+
+    const avail = availability(model);
+    if (!avail.tornado.ok) {
+      // Verbatim per the task brief — the reviewer checks this exact wording.
+      renderPlaceholder('needs ≥ 2 strategies and ≥ 1 parameter with low and high — add bounds in Parameters');
+      return;
+    }
+
+    let strategies, bars;
+    try {
+      strategies = strategyNamesOf(model);
+      if (!strategies.includes(tornadoA)) tornadoA = strategies[0] ?? null;
+      if (!strategies.includes(tornadoB)) tornadoB = strategies[1] ?? strategies[0] ?? null;
+      bars = runTornado(model, { a: tornadoA, b: tornadoB, wtp: lastGoodWtp });
+    } catch {
+      // availability() only checks structural preconditions (>=2 strategies, >=1 bounded param) —
+      // it does NOT run check()/gate(), so a model that's structurally eligible but otherwise
+      // broken (e.g. a markov row-sum error) can still throw inside run(). Caught here rather than
+      // pre-guarded with a separate gate() call, since this try/catch is needed regardless (gate()
+      // does not cover every possible run()-time failure either).
+      renderPlaceholder('Could not compute the Tornado analysis — check the model in Validation.');
+      return;
+    }
+
+    const wrap = h('div', { class: 'res-tornado' });
+
+    const selA = h('select', { class: 'res-select', 'aria-label': 'Comparator A' },
+      ...strategies.map((s) => h('option', { value: s, selected: s === tornadoA ? '' : undefined }, s)));
+    const selB = h('select', { class: 'res-select', 'aria-label': 'Comparator B' },
+      ...strategies.map((s) => h('option', { value: s, selected: s === tornadoB ? '' : undefined }, s)));
+    selA.addEventListener('change', () => { tornadoA = selA.value; renderBody(); });
+    selB.addEventListener('change', () => { tornadoB = selB.value; renderBody(); });
+    wrap.appendChild(h('div', { class: 'res-tornado-selects' },
+      h('label', {}, 'A ', selA), h('label', {}, 'B ', selB)));
+
+    const chartEl = h('div', { class: 'res-chart' });
+    wrap.appendChild(chartEl);
+
+    const spec = buildTornadoSpec(bars, readTheme());
+    mountChart(chartEl, spec);
+    activeChartRenderer = () => {
+      const s2 = buildTornadoSpec(bars, readTheme());
+      plotly.react(chartEl, s2.data, s2.layout, s2.config).catch(() => {});
+    };
+
+    wrap.appendChild(buildTornadoDetails(bars));
+    bodyEl.appendChild(wrap);
+  }
+
+  // ---------- PSA tab (Task 5) — see module doc for the lastPsa/staleness design ----------
+
+  function buildPsaPlaneDetails(strategyNames, plane) {
+    const det = h('details', { class: 'res-details' });
+    det.appendChild(h('summary', {}, 'Show data'));
+    const table = h('table', { class: 'res-table' });
+    const headCells = [h('th', {}, '#')];
+    for (const s of strategyNames) headCells.push(h('th', { class: 'res-num' }, `${s} ΔCost`), h('th', { class: 'res-num' }, `${s} ΔQALY`));
+    table.appendChild(h('thead', {}, h('tr', {}, ...headCells)));
+    const tbody = h('tbody');
+    const n = strategyNames.length > 0 ? plane[strategyNames[0]].length : 0;
+    for (let i = 0; i < n; i++) {
+      const cells = [h('td', {}, String(i + 1))];
+      for (const s of strategyNames) {
+        const p = plane[s][i];
+        cells.push(h('td', { class: 'res-num' }, formatMoney(p.dcost)), h('td', { class: 'res-num' }, format4(p.dqaly)));
+      }
+      tbody.appendChild(h('tr', {}, ...cells));
+    }
+    table.appendChild(tbody);
+    det.appendChild(table);
+    return det;
+  }
+
+  function buildCeacDetails(wtps, curves, strategyNames) {
+    const det = h('details', { class: 'res-details' });
+    det.appendChild(h('summary', {}, 'Show data'));
+    const table = h('table', { class: 'res-table' });
+    table.appendChild(h('thead', {}, h('tr', {},
+      h('th', {}, 'WTP'), ...strategyNames.map((s) => h('th', { class: 'res-num' }, s)),
+    )));
+    const tbody = h('tbody');
+    wtps.forEach((wtp, i) => {
+      const cells = [h('td', { class: 'res-num' }, formatMoney(wtp))];
+      for (const s of strategyNames) cells.push(h('td', { class: 'res-num' }, format4(curves[s][i])));
+      tbody.appendChild(h('tr', {}, ...cells));
+    });
+    table.appendChild(tbody);
+    det.appendChild(table);
+    return det;
+  }
+
+  function buildEvpiDetails(wtps, evpiValues) {
+    const det = h('details', { class: 'res-details' });
+    det.appendChild(h('summary', {}, 'Show data'));
+    const table = h('table', { class: 'res-table' });
+    table.appendChild(h('thead', {}, h('tr', {}, h('th', {}, 'WTP'), h('th', { class: 'res-num' }, 'EVPI'))));
+    const tbody = h('tbody');
+    wtps.forEach((wtp, i) => {
+      tbody.appendChild(h('tr', {},
+        h('td', { class: 'res-num' }, formatMoney(wtp)), h('td', { class: 'res-num' }, formatMoney(evpiValues[i]))));
+    });
+    table.appendChild(tbody);
+    det.appendChild(table);
+    return det;
+  }
+
+  // Whether PSA could be (re-)run RIGHT NOW off the live model — gates the "Run PSA" button
+  // (disabled, never hidden, when false) independent of whether lastPsa already holds an older
+  // result. Wrapped in try/catch: availability()/gate() are both safe on a well-formed Model, but
+  // this is called from render paths that must never throw.
+  function psaLiveOk(model, parseError) {
+    if (parseError || !model) return false;
+    try { return gate(model).ok && availability(model).psa.ok; } catch { return false; }
+  }
+
+  function buildPsaHeader(model, liveOk) {
+    const settings = model?.settings?.psa ?? { n: lastPsa?.n ?? 1000, seed: lastPsa?.seed ?? 1 };
+    const { n, seed } = settings;
+    const btn = h('button', { type: 'button', class: 'res-psa-run' }, psaRunLabel(n));
+    btn.disabled = !liveOk;
+    btn.addEventListener('click', runPsaNow);
+    const children = [h('span', { class: 'res-psa-meta res-font-data' }, `n=${n}, seed=${seed}`), btn];
+    if (lastPsa) {
+      children.push(h('span', { class: 'res-stamp res-psa-stamp' }, formatPsaStamp(lastPsa.n, lastPsa.elapsedMs, new Date(lastPsa.ts))));
+    }
+    return h('div', { class: 'res-psa-head' }, ...children);
+  }
+
+  function renderPsaTab() {
+    const { model, parseError } = store.get();
+    const liveOk = psaLiveOk(model, parseError);
+
+    if (!lastPsa) {
+      if (parseError || !model) { renderPlaceholder('Fix the YAML error to see the PSA analysis.'); return; }
+      if (!gate(model).ok) { renderPlaceholder('Model has errors — fix them in Validation before running PSA.'); return; }
+      if (!availability(model).psa.ok) {
+        // Verbatim per the task brief — the reviewer checks this exact wording.
+        renderPlaceholder('no parameter has a dist — add distributions in Parameters');
+        return;
+      }
+      bodyEl.appendChild(buildPsaHeader(model, liveOk));
+      renderPlaceholder('Run PSA to see the cost-effectiveness plane, CEAC, and EVPI.');
+      return;
+    }
+
+    bodyEl.appendChild(buildPsaHeader(model, liveOk));
+
+    const { psaResult } = lastPsa;
+    const strategies = psaResult.strategies;
+    if (!strategies.includes(psaComparator)) psaComparator = strategies[0] ?? null;
+
+    const wrap = h('div', { class: 'res-psa' });
+    const sel = h('select', { class: 'res-select', 'aria-label': 'Comparator' },
+      ...strategies.map((s) => h('option', { value: s, selected: s === psaComparator ? '' : undefined }, s)));
+    sel.addEventListener('change', () => { psaComparator = sel.value; renderBody(); });
+    wrap.appendChild(h('div', { class: 'res-psa-comparator' }, h('label', {}, 'Comparator ', sel)));
+
+    const strategyIndex = buildStrategyIndex(strategies);
+    const wtpMax = computeWtpMax(model?.settings?.wtp ?? null, lastGoodWtp);
+    // Pure re-derivation from the CACHED psaResult — no engine re-run on a comparator switch (see
+    // module doc). The comparator name rides on the plane object per T3's binding convention (the
+    // 3-arg buildCEPlaneSpec contract has no room for a 4th argument).
+    const derived = psaDerived(psaResult, { comparator: psaComparator, wtpMax });
+    const plane = { ...derived.plane, comparator: psaComparator };
+
+    const planeEl = h('div', { class: 'res-psa-chart' });
+    const ceacEl = h('div', { class: 'res-psa-chart' });
+    const evpiEl = h('div', { class: 'res-psa-chart' });
+
+    function buildSpecs(theme) {
+      return {
+        plane: buildCEPlaneSpec(plane, theme, strategyIndex),
+        ceac: buildCEACSpec({ wtps: derived.wtps, curves: derived.ceacCurves }, theme, strategyIndex),
+        evpi: buildEVPISpec({ wtps: derived.wtps, evpi: derived.evpi }, theme),
+      };
+    }
+
+    const s0 = buildSpecs(readTheme());
+    mountChart(planeEl, s0.plane);
+    mountChart(ceacEl, s0.ceac);
+    mountChart(evpiEl, s0.evpi);
+    // Task 5 requirement: a theme flip must re-render ALL THREE PSA charts, not just the last
+    // mounted one — unlike every other chart-bearing tab (always exactly one chart), this closure
+    // re-renders the full set in place.
+    activeChartRenderer = () => {
+      const s2 = buildSpecs(readTheme());
+      plotly.react(planeEl, s2.plane.data, s2.plane.layout, s2.plane.config).catch(() => {});
+      plotly.react(ceacEl, s2.ceac.data, s2.ceac.layout, s2.ceac.config).catch(() => {});
+      plotly.react(evpiEl, s2.evpi.data, s2.evpi.layout, s2.evpi.config).catch(() => {});
+    };
+
+    wrap.appendChild(h('div', { class: 'res-psa-section' },
+      h('h3', {}, 'Cost-effectiveness plane'), planeEl,
+      buildPsaPlaneDetails(Object.keys(derived.plane), derived.plane)));
+    wrap.appendChild(h('div', { class: 'res-psa-section' },
+      h('h3', {}, 'CEAC'), ceacEl, buildCeacDetails(derived.wtps, derived.ceacCurves, strategies)));
+    wrap.appendChild(h('div', { class: 'res-psa-section' },
+      h('h3', {}, 'EVPI'), evpiEl, buildEvpiDetails(derived.wtps, derived.evpi)));
+
+    bodyEl.appendChild(wrap);
+  }
+
+  // Explicit, synchronous PSA run — the ONE potentially-slow analysis in this app (see module
+  // doc). Mirrors app.js's own runModel() busy-state pattern: set disabled/aria-busy on the
+  // button, defer the actual (synchronous, blocking) computation one tick via setTimeout(0) so
+  // that busy state actually PAINTS before the main thread blocks. On success, busy state is
+  // cleared implicitly — renderBody() replaces the whole tab body (fresh, un-busy button) rather
+  // than un-disabling this same node; on a thrown error it's cleared explicitly on THIS button
+  // before returning, since renderBody() is never reached on that path.
+  function runPsaNow() {
+    flush();
+    const { model, parseError } = store.get();
+    if (parseError || !model) { showToast('Fix the YAML error before running PSA.'); return; }
+    if (!gate(model).ok) { showToast('Model has errors — fix them to run PSA.'); return; }
+    if (!availability(model).psa.ok) return; // button is disabled in this case; defensive no-op
+
+    const btn = bodyEl.querySelector('.res-psa-run');
+    if (btn) { btn.disabled = true; btn.setAttribute('aria-busy', 'true'); }
+
+    setTimeout(() => {
+      const t0 = performance.now();
+      let psaResult;
+      try {
+        psaResult = runPsa(model);
+      } catch {
+        if (btn) { btn.disabled = false; btn.removeAttribute('aria-busy'); }
+        showToast('PSA failed to run — check the model.');
+        return;
+      }
+      const elapsedMs = performance.now() - t0;
+      lastPsa = {
+        psaResult, text: store.get().text, ts: Date.now(), elapsedMs,
+        n: model.settings.psa.n, seed: model.settings.psa.seed,
+      };
+      if (!psaResult.strategies.includes(psaComparator)) psaComparator = psaResult.strategies[0] ?? null;
+      renderStaleBanner();
+      renderBody();
+    }, 0);
+  }
+
   function renderValidationTab() {
     if (lastGateErrors && lastGateErrors.length) {
       const n = lastGateErrors.length;
@@ -345,8 +668,8 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
   const TAB_RENDERERS = {
     cea: renderCeaTab,
     trace: renderTraceTab,
-    tornado: () => renderPlaceholder('Tornado sensitivity — content in Task 5.'),
-    psa: () => renderPlaceholder('Probabilistic sensitivity analysis — content in Task 5.'),
+    tornado: renderTornadoTab,
+    psa: renderPsaTab,
     validation: renderValidationTab,
   };
 

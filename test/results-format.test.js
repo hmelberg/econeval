@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   formatMoney, format4, formatIcer, statusLabel, formatRunStamp, buildStrategyIndex, parseWtpInput,
+  computeWtpMax, psaRunLabel, formatPsaStamp,
 } from '../js/ui/results-format.js';
 
 // --- formatMoney ---
@@ -95,4 +96,38 @@ test('parseWtpInput: "0" is a real, explicit value -> 0, not lastGood', () => {
 
 test('parseWtpInput: a valid number string -> that number', () => {
   assert.equal(parseWtpInput('25000', 30000), 25000);
+});
+
+// --- computeWtpMax ---
+
+test('computeWtpMax: settings.wtp present -> 2.5x settings.wtp, header ignored', () => {
+  assert.equal(computeWtpMax(30000, 50000), 75000);
+});
+
+test('computeWtpMax: settings.wtp null/undefined -> 2.5x the header wtp', () => {
+  assert.equal(computeWtpMax(null, 40000), 100000);
+  assert.equal(computeWtpMax(undefined, 40000), 100000);
+});
+
+test('computeWtpMax: neither available -> flat 100000 fallback', () => {
+  assert.equal(computeWtpMax(null, null), 100000);
+  assert.equal(computeWtpMax(undefined, undefined), 100000);
+});
+
+test('computeWtpMax: settings.wtp = 0 is a real explicit value, not treated as absent', () => {
+  assert.equal(computeWtpMax(0, 40000), 0);
+});
+
+// --- psaRunLabel ---
+
+test('psaRunLabel: "Run PSA (n=<n>)"', () => {
+  assert.equal(psaRunLabel(1000), 'Run PSA (n=1000)');
+  assert.equal(psaRunLabel(500), 'Run PSA (n=500)');
+});
+
+// --- formatPsaStamp ---
+
+test('formatPsaStamp: "PSA · n=<n> · <ms>ms · HH:MM", elapsedMs rounded', () => {
+  assert.equal(formatPsaStamp(1000, 842.4, new Date(2026, 0, 1, 14, 32)), 'PSA · n=1000 · 842ms · 14:32');
+  assert.equal(formatPsaStamp(60, 12.6, new Date(2026, 0, 1, 9, 5)), 'PSA · n=60 · 13ms · 09:05');
 });

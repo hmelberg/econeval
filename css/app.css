@@ -845,6 +845,81 @@ button:active {
   margin-bottom: var(--sp-1);
 }
 
+/* Shared by every NEW select this task adds (Tornado's A/B, PSA's comparator) — .res-trace-select
+   select (above) predates this task and is left as its own rule to avoid touching shipped CSS. */
+.res-select {
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-1);
+}
+
+/* ---------- Tornado tab (Task 5) ---------- */
+
+.res-tornado {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: var(--sp-2);
+}
+.res-tornado-selects {
+  flex: 0 0 auto;
+  display: flex;
+  gap: var(--sp-3);
+  font-size: var(--fs-1);
+  color: var(--muted);
+}
+
+/* ---------- PSA tab (Task 5) ---------- */
+
+.res-psa-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--sp-3);
+}
+.res-psa-meta {
+  color: var(--muted);
+  font-size: var(--fs-1);
+}
+
+/* PSA is the app's one explicit, potentially-slow analysis — its own button, deliberately NOT
+   styled like #btn-run's solid accent fill (that's reserved as the single "primary action" look;
+   this is a secondary, tab-local trigger, same default quiet button styling as everything else). */
+.res-psa-run[aria-busy="true"] {
+  opacity: .7;
+  cursor: wait;
+}
+
+.res-psa {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.res-psa-comparator {
+  font-size: var(--fs-1);
+  color: var(--muted);
+}
+.res-psa-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.res-psa-section h3 {
+  margin: 0;
+  font-size: var(--fs-1);
+  font-weight: 400;
+  color: var(--muted);
+}
+.res-psa-chart {
+  width: 100%;
+  height: 260px;
+}
+
 /* ---------- Dialogs ---------- */
 
 dialog {
