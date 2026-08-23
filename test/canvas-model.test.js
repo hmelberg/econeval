@@ -217,9 +217,12 @@ test('scopedStore: select/undo/redo/markSaved/subscribe pass straight through to
   const store = createStore(SUB_MARKOV_TEXT);
   const scoped = scopedStore(store, 'sub');
 
+  // Task 10 controller ruling: scopedStore.select stamps selection.modelPath with its own
+  // chain, so store.js's isSelectionValid can resolve the SCOPED model the selection actually
+  // refers to (rather than checking a sub-model's state name against the top-level model).
   scoped.select({ kind: 'state', id: 'x' });
-  assert.deepEqual(store.get().selection, { kind: 'state', id: 'x' });
-  assert.deepEqual(scoped.get().selection, { kind: 'state', id: 'x' });
+  assert.deepEqual(store.get().selection, { kind: 'state', id: 'x', modelPath: ['sub'] });
+  assert.deepEqual(scoped.get().selection, { kind: 'state', id: 'x', modelPath: ['sub'] });
 
   let notified = 0;
   const unsub = scoped.subscribe(() => { notified += 1; });
@@ -236,4 +239,37 @@ test('scopedStore: select/undo/redo/markSaved/subscribe pass straight through to
   assert.equal(scoped.get().dirty, true);
   scoped.markSaved();
   assert.equal(store.get().dirty, false);
+});
+
+test('scopedStore.select stamps the FULL nested modelPath when composed (outer, then inner)', () => {
+  const text = `
+econeval: 1
+type: markov
+name: top
+settings: {cycles: 5}
+states:
+  a: {cost: 0, utility: 1}
+transitions:
+  a: {a: 1}
+models:
+  outer:
+    type: markov
+    settings: {cycles: 5}
+    states:
+      p: {cost: 0, utility: 1}
+    transitions:
+      p: {p: 1}
+    models:
+      inner:
+        type: markov
+        settings: {cycles: 5}
+        states:
+          q: {cost: 0, utility: 1}
+        transitions:
+          q: {q: 1}
+`;
+  const store = createStore(text);
+  const nested = scopedStore(scopedStore(store, 'outer'), 'inner');
+  nested.select({ kind: 'state', id: 'q' });
+  assert.deepEqual(store.get().selection, { kind: 'state', id: 'q', modelPath: ['outer', 'inner'] });
 });

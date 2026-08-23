@@ -9,11 +9,18 @@
 //      chase), positions nodes via the injected layoutFor, and re-renders in full on every
 //      store.subscribe notification (no vDOM — fine at this scale, per the brief).
 //
-// Scope (binding, task-9 brief): render + click-to-select + double-click-to-enter-a-sub-model +
-// pan/zoom only. No editing gestures (drag-to-move, add/connect/delete tools) — those land in
-// Task 10, which extends this same file and reuses everything below.
+// Scope: Task 9 delivered render + click-to-select + double-click-to-enter-a-sub-model + pan/zoom.
+// Task 10 (this revision) adds the editing gestures: a 4-tool toolbar (Select/Add/Connect/Delete,
+// appended into #canvas-toolbar — panels.js's maximize button already lives there, never
+// replaced), node drag-to-move (live preview + one setLayout op on release), inline
+// foreignObject rename, Add/Connect/Delete tool click & drag gestures, a transient toast strip
+// for op errors, and the store's optional {flush} callback (Task 12 passes sync.flush — see the
+// controller ruling below).
 
-import { nodeAt } from './ops.js';
+import {
+  nodeAt, addState, renameState, deleteState, addTransition, deleteTransition, setLayout,
+  addChild, renameNode, deleteNode,
+} from './ops.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -144,7 +151,13 @@ export function scopedStore(store, modelName) {
         return { ...model, models: { ...model.models, [modelName]: newSub } };
       }, opts);
     },
-    select: (sel) => store.select(sel),
+    // Task 10 controller ruling: stamp this wrapper's own name onto selection.modelPath so
+    // store.js's isSelectionValid can resolve the SCOPED model the selection actually refers to
+    // (rather than checking, say, a sub-model's state name against the top-level model). Chained
+    // wrappers each prepend their own name, so scopedStore(scopedStore(s,'outer'),'inner') ends
+    // up stamping ['outer','inner'] on the base store's selection — matching how canvas.js builds
+    // currentModelPath (outer pushed before inner).
+    select: (sel) => store.select({ ...sel, modelPath: [modelName, ...(sel.modelPath ?? [])] }),
     undo: () => store.undo(),
     redo: () => store.redo(),
     markSaved: () => store.markSaved(),
@@ -195,20 +208,43 @@ function treeNodeKind(node, path) {
   return 'chance';
 }
 
-export function createCanvas(svgEl, store, { layoutFor }) {
+// createCanvas(svgEl, store, opts) options contract (Task 10 addition, binding — Task 12 consumes
+// this literally):
+//   layoutFor: (model) -> {key: [x,y]}   — required, unchanged from Task 9.
+//   flush: () => void                    — optional, defaults to a no-op. Controller ruling:
+//     every gesture that ends up calling store.applyOp (directly, or via the scoped store) must
+//     call flush() FIRST — Task 12 passes sync.flush so a pending debounced YAML edit is
+//     committed into the store before a canvas gesture reads/mutates the model, so the gesture
+//     never operates on a stale model and never gets silently overwritten by a debounce that
+//     fires moments later. Called at the top of every node/edge/background pointerdown handler
+//     (the start of a pointer gesture) and at the top of the Delete/Backspace key handler and the
+//     rename-commit handler (the two op-producing gestures that don't begin with a pointerdown).
+export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
   const breadcrumbEl = typeof document !== 'undefined' ? document.getElementById('breadcrumb') : null;
+  const toolbarEl = typeof document !== 'undefined' ? document.getElementById('canvas-toolbar') : null;
+  const toastEl = typeof document !== 'undefined' ? document.getElementById('canvas-toast') : null;
 
   let tool = 'select';
   const currentModelPath = []; // names into .models, chained; [] = the top-level model itself
 
   const view = { x: 0, y: 0, w: BASE_W, h: BASE_H };
   let zoom = 1;
-  let dragState = null;
+  let gesture = null;       // the in-flight pointer gesture (pan / node move / connect drag), or null
+  let nodeIndex = [];       // rebuilt every render: [{kind, key|path, xy, hitR, el, ...}] — used for
+                             // hit-testing (Connect-tool drop target) and for re-resolving a node's
+                             // CURRENT element/position at gesture-start (after flush() may have
+                             // re-rendered) rather than trusting a stale closure reference.
+  let lastDown = null;      // { kind, key|path, time } — for hand-rolled double-click detection
+                             // (self-timed rather than relying on native dblclick synthesis, which
+                             // interacts unpredictably with pointer capture; see task-10 report)
+  let activeRename = null;  // { fo, input, target, currentName } while an inline rename is open
+  let toastTimer = null;
 
   function applyViewBox() {
     svgEl.setAttribute('viewBox', `${view.x} ${view.y} ${view.w} ${view.h}`);
   }
   applyViewBox();
+  svgEl.setAttribute('data-tool', tool);
 
   // -------- model/store resolution for the currently-entered scope --------
 
@@ -219,6 +255,39 @@ export function createCanvas(svgEl, store, { layoutFor }) {
       m = m.models[name];
     }
     return m;
+  }
+
+  function arraysEqual(a, b) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false;
+    return true;
+  }
+
+  // selection.modelPath is stamped by scopedStore.select (js/ui/canvas.js, top half) with the
+  // exact chain of sub-model names the selection was made through; [] / undefined means the
+  // top-level model. A selection only renders a halo when it matches the scope CURRENTLY on
+  // screen — otherwise an unrelated sub-model's selection would incorrectly highlight something
+  // in the wrong view (or nothing at all, if the id happens not to resolve here).
+  function sameModelPath(a, b) {
+    return arraysEqual(a ?? [], b ?? []);
+  }
+
+  // -------- toast strip (transient op-error messages; "errors surfaced, never swallowed") --------
+
+  function showToast(message) {
+    if (!toastEl) return;
+    toastEl.textContent = message;
+    toastEl.hidden = false;
+    if (toastTimer !== null) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toastEl.hidden = true; }, 3500);
+  }
+
+  function runOp(activeStore, fn) {
+    try {
+      activeStore.applyOp(fn);
+    } catch (err) {
+      showToast(err && err.message ? err.message : String(err));
+    }
   }
 
   // -------- breadcrumb --------
@@ -278,9 +347,184 @@ export function createCanvas(svgEl, store, { layoutFor }) {
     return defs;
   }
 
+  // -------- toolbar (Select/Add/Connect/Delete — appended into #canvas-toolbar; panels.js's own
+  // maximize button already lives there and is never touched/replaced) --------
+
+  const TOOL_DEFS = [
+    { name: 'select', glyph: '↖', label: 'Select', key: 'V' },   // north-west arrow (pointer)
+    { name: 'add', glyph: '+', label: 'Add', key: 'A' },
+    { name: 'connect', glyph: '→', label: 'Connect', key: 'C' }, // rightwards arrow
+    { name: 'delete', glyph: '✕', label: 'Delete', key: 'D' },   // multiplication x
+  ];
+  const toolButtons = {};
+  if (toolbarEl) {
+    for (const def of TOOL_DEFS) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.id = `tool-${def.name}`;
+      btn.textContent = def.glyph;
+      btn.setAttribute('aria-label', def.label);
+      btn.setAttribute('aria-pressed', String(def.name === tool));
+      btn.title = `${def.label} (${def.key})`;
+      btn.addEventListener('click', () => setTool(def.name));
+      toolbarEl.appendChild(btn);
+      toolButtons[def.name] = btn;
+    }
+  }
+
+  function updateToolButtons() {
+    for (const name of Object.keys(toolButtons)) {
+      toolButtons[name].setAttribute('aria-pressed', String(tool === name));
+    }
+  }
+
+  function cancelGesture() {
+    if (!gesture) return;
+    if (gesture.ghostEl) { try { gesture.ghostEl.remove(); } catch { /* already detached */ } }
+    try { svgEl.releasePointerCapture(gesture.pointerId); } catch { /* already released */ }
+    gesture = null;
+    render(); // discard any live-preview transform by re-rendering from the model's real layout
+  }
+
+  function setTool(t) {
+    if (tool === t) return;
+    cancelGesture();
+    cancelRename();
+    tool = t;
+    svgEl.setAttribute('data-tool', tool);
+    updateToolButtons();
+  }
+
+  function escapeAll() {
+    cancelRename();
+    cancelGesture();
+    if (tool !== 'select') {
+      tool = 'select';
+      svgEl.setAttribute('data-tool', tool);
+      updateToolButtons();
+    }
+  }
+
+  // -------- keyboard shortcuts (global; ignored while typing in an input/textarea/foreignObject
+  // input, incl. the rename box itself — that box handles its own Enter/Escape locally) --------
+
+  function isTypingTarget(t) {
+    if (!t) return false;
+    const tag = t.tagName ? String(t.tagName).toLowerCase() : '';
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+    return !!t.isContentEditable;
+  }
+
+  function deleteSelection() {
+    const { selection } = store.get();
+    if (!selection || selection.kind == null) return;
+    if (!sameModelPath(selection.modelPath, currentModelPath)) return; // not visible in this scope
+    flush();
+    const activeStore = scopedStoreFor(store, currentModelPath);
+    if (selection.kind === 'edge') {
+      runOp(activeStore, (m) => deleteTransition(m, selection.id.from, selection.id.to));
+    } else if (selection.kind === 'state') {
+      runOp(activeStore, (m) => deleteState(m, selection.id));
+    } else if (selection.kind === 'node') {
+      runOp(activeStore, (m) => deleteNode(m, selection.id));
+    }
+  }
+
+  if (typeof document !== 'undefined') {
+    document.addEventListener('keydown', (e) => {
+      if (isTypingTarget(e.target)) return;
+      if (e.key === 'Escape') { e.preventDefault(); escapeAll(); return; }
+      if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelection(); return; }
+      if (e.metaKey || e.ctrlKey || e.altKey) return; // don't hijack browser/OS chords
+      const k = e.key.toLowerCase();
+      if (k === 'v') { e.preventDefault(); setTool('select'); }
+      else if (k === 'a') { e.preventDefault(); setTool('add'); }
+      else if (k === 'c') { e.preventDefault(); setTool('connect'); }
+      else if (k === 'd') { e.preventDefault(); setTool('delete'); }
+    });
+  }
+
+  // -------- inline rename (SVG foreignObject over the node) --------
+
+  function cancelRename() {
+    if (activeRename) {
+      try { activeRename.fo.remove(); } catch { /* already detached */ }
+      activeRename = null;
+    }
+  }
+
+  function commitRename() {
+    const rec = activeRename;
+    if (!rec) return;
+    activeRename = null;
+    try { rec.fo.remove(); } catch { /* already detached */ }
+    const newName = rec.input.value;
+    if (newName === rec.currentName) return; // no-op: nothing changed
+    flush();
+    const activeStore = scopedStoreFor(store, currentModelPath);
+    if (rec.target.kind === 'state') runOp(activeStore, (m) => renameState(m, rec.target.key, newName));
+    else runOp(activeStore, (m) => renameNode(m, rec.target.path, newName));
+  }
+
+  function startRename(target) {
+    cancelRename();
+    const currentName = target.kind === 'state' ? target.key : target.node.name;
+    const [cx, cy] = target.xy;
+    const width = 120;
+    const height = 24;
+    const fo = el('foreignObject', {
+      x: cx - width / 2, y: cy - height / 2, width, height, class: 'rename-fo',
+    });
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'rename-input';
+    input.value = currentName;
+    fo.appendChild(input);
+    svgEl.appendChild(fo);
+    activeRename = { fo, input, target, currentName };
+    if (typeof input.focus === 'function') input.focus();
+    if (typeof input.select === 'function') input.select();
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); commitRename(); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelRename(); }
+    });
+    input.addEventListener('blur', () => { if (activeRename) commitRename(); });
+  }
+
+  // -------- node identity / double-click detection --------
+
+  const DOUBLE_CLICK_MS = 400;
+
+  function sameNodeId(a, b) {
+    if (a.kind !== b.kind) return false;
+    return a.kind === 'state' ? a.key === b.key : arraysEqual(a.path, b.path);
+  }
+
+  function handleNodeDoubleClick(target) {
+    if (target.kind === 'node' && target.treeKind === 'submodel') {
+      currentModelPath.push(target.node.model);
+      render();
+      return;
+    }
+    if (tool !== 'select') return;
+    startRename(target);
+  }
+
+  function handleNodePointerDown(e, id) {
+    flush(); // controller ruling: sync any pending debounced YAML edit before this gesture starts
+    const fresh = nodeIndex.find((n) => sameNodeId(n, id));
+    if (!fresh) return; // vanished under us (e.g. the flush() above triggered an edit that removed it)
+    const now = Date.now();
+    const isDbl = !!(lastDown && sameNodeId(lastDown, id) && (now - lastDown.time) < DOUBLE_CLICK_MS);
+    lastDown = isDbl ? null : { ...id, time: now };
+    if (isDbl) { handleNodeDoubleClick(fresh); return; }
+    startGesture(e, { domKind: 'node', ...fresh });
+  }
+
   // -------- markov --------
 
-  function renderMarkovEdge(activeStore, from, to, fromXY, toXY, label, reward, selected) {
+  function renderMarkovEdge(from, to, fromXY, toXY, label, reward, selected) {
     const g = el('g', { class: 'edge' });
     const isLoop = from === to;
     const d = isLoop ? selfLoopPath(fromXY, NODE_R) : edgePath(fromXY, toXY, NODE_R);
@@ -291,14 +535,15 @@ export function createCanvas(svgEl, store, { layoutFor }) {
       const labelText = reward ? `${label} ⊕` : label;
       g.appendChild(el('text', { class: 'edge-label', x: lx, y: ly, 'text-anchor': 'middle' }, text(labelText)));
     }
-    g.addEventListener('click', (e) => {
+    g.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
-      activeStore.select({ kind: 'edge', id: { from, to } });
+      flush();
+      startGesture(e, { domKind: 'edge', variant: 'markov', from, to });
     });
     return g;
   }
 
-  function renderMarkovNode(activeStore, state, xy, isSelected) {
+  function renderMarkovNode(state, xy, isSelected) {
     const [cx, cy] = xy;
     const g = el('g', { class: 'node', 'data-kind': 'state', transform: `translate(${cx},${cy})` });
     if (isSelected) g.appendChild(el('circle', { class: 'halo', cx: 0, cy: 0, r: NODE_R + HALO_GAP }));
@@ -306,14 +551,14 @@ export function createCanvas(svgEl, store, { layoutFor }) {
     g.appendChild(el('text', {
       class: 'node-name', x: 0, y: 0, 'text-anchor': 'middle', 'dominant-baseline': 'central',
     }, text(state.name)));
-    g.addEventListener('click', (e) => {
+    g.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
-      activeStore.select({ kind: 'state', id: state.name });
+      handleNodePointerDown(e, { kind: 'state', key: state.name });
     });
     return g;
   }
 
-  function renderMarkov(activeStore, model, positions, selection, edgesG, nodesG) {
+  function renderMarkov(model, positions, selection, edgesG, nodesG) {
     for (const state of model.states) {
       const row = model.transitions[state.name];
       const fromXY = positions[state.name];
@@ -325,14 +570,14 @@ export function createCanvas(svgEl, store, { layoutFor }) {
           const toXY = positions[target];
           if (target !== state.name && !toXY) continue;
           const selected = selection?.kind === 'edge' && selection.id.from === state.name && selection.id.to === target;
-          edgesG.appendChild(renderMarkovEdge(activeStore, state.name, target, fromXY, toXY, `${count}/${total}`, false, selected));
+          edgesG.appendChild(renderMarkovEdge(state.name, target, fromXY, toXY, `${count}/${total}`, false, selected));
         }
       } else {
         for (const [target, entry] of Object.entries(row.to)) {
           const toXY = positions[target];
           if (target !== state.name && !toXY) continue;
           const selected = selection?.kind === 'edge' && selection.id.from === state.name && selection.id.to === target;
-          edgesG.appendChild(renderMarkovEdge(activeStore, state.name, target, fromXY, toXY, pLabelText(entry.p), hasReward(entry), selected));
+          edgesG.appendChild(renderMarkovEdge(state.name, target, fromXY, toXY, pLabelText(entry.p), hasReward(entry), selected));
         }
       }
     }
@@ -341,7 +586,9 @@ export function createCanvas(svgEl, store, { layoutFor }) {
       const xy = positions[state.name];
       if (!xy) continue;
       const isSelected = selection?.kind === 'state' && selection.id === state.name;
-      nodesG.appendChild(renderMarkovNode(activeStore, state, xy, isSelected));
+      const g = renderMarkovNode(state, xy, isSelected);
+      nodesG.appendChild(g);
+      nodeIndex.push({ kind: 'state', key: state.name, xy, hitR: NODE_R, el: g, state });
     }
   }
 
@@ -407,7 +654,7 @@ export function createCanvas(svgEl, store, { layoutFor }) {
     return NODE_R; // root, chance
   }
 
-  function renderTreeEdge(activeStore, parentXY, childXY, label, childPath, childKind) {
+  function renderTreeEdge(parentXY, childXY, label, childPath, childKind) {
     const g = el('g', { class: 'edge' });
     const d = edgePath(parentXY, childXY, treeTrimRadius(childKind));
     g.appendChild(el('path', { class: 'edge-line', d }));
@@ -415,14 +662,15 @@ export function createCanvas(svgEl, store, { layoutFor }) {
       const [lx, ly] = edgeLabelPos(parentXY, childXY);
       g.appendChild(el('text', { class: 'edge-label', x: lx, y: ly, 'text-anchor': 'middle' }, text(label)));
     }
-    g.addEventListener('click', (e) => {
+    g.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
-      activeStore.select({ kind: 'node', id: childPath });
+      flush();
+      startGesture(e, { domKind: 'edge', variant: 'tree', path: childPath });
     });
     return g;
   }
 
-  function renderTreeNode(activeStore, node, xy, kind, isSelected, path) {
+  function renderTreeNode(node, xy, kind, isSelected, path) {
     const [cx, cy] = xy;
     const g = el('g', { class: 'node', 'data-kind': kind, transform: `translate(${cx},${cy})` });
     if (isSelected) g.appendChild(haloForKind(kind));
@@ -444,21 +692,14 @@ export function createCanvas(svgEl, store, { layoutFor }) {
       }, text(payoffText)));
     }
 
-    g.addEventListener('click', (e) => {
+    g.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
-      activeStore.select({ kind: 'node', id: path });
+      handleNodePointerDown(e, { kind: 'node', path });
     });
-    if (kind === 'submodel') {
-      g.addEventListener('dblclick', (e) => {
-        e.stopPropagation();
-        currentModelPath.push(node.model);
-        render();
-      });
-    }
     return g;
   }
 
-  function renderTree(activeStore, model, positions, selection, edgesG, nodesG) {
+  function renderTree(model, positions, selection, edgesG, nodesG) {
     let selectedNode = null;
     if (selection?.kind === 'node') {
       try {
@@ -478,10 +719,12 @@ export function createCanvas(svgEl, store, { layoutFor }) {
       if (parentXY) {
         const isRootChild = path.length === 2; // strategy branch: never carries 'p' (ops.js rule)
         const label = isRootChild ? '' : pLabelText(node.p);
-        edgesG.appendChild(renderTreeEdge(activeStore, parentXY, xy, label, path, kind));
+        edgesG.appendChild(renderTreeEdge(parentXY, xy, label, path, kind));
       }
 
-      nodesG.appendChild(renderTreeNode(activeStore, node, xy, kind, node === selectedNode, path));
+      const g = renderTreeNode(node, xy, kind, node === selectedNode, path);
+      nodesG.appendChild(g);
+      nodeIndex.push({ kind: 'node', path, xy, hitR: treeTrimRadius(kind), el: g, treeKind: kind, node });
 
       for (const child of node.children) walk(child, [...path, child.name], xy);
     }
@@ -492,25 +735,32 @@ export function createCanvas(svgEl, store, { layoutFor }) {
   // -------- top-level render --------
 
   function buildSvg(model) {
+    cancelRename();
     svgEl.replaceChildren();
+    svgEl.setAttribute('data-model-type', model.type);
     svgEl.appendChild(buildDefs());
     const edgesG = el('g', { class: 'edges' });
     const nodesG = el('g', { class: 'nodes' });
     svgEl.appendChild(edgesG);
     svgEl.appendChild(nodesG);
 
+    nodeIndex = [];
     const positions = layoutFor(model);
-    const selection = store.get().selection;
-    const activeStore = scopedStoreFor(store, currentModelPath);
-
-    if (model.type === 'markov') renderMarkov(activeStore, model, positions, selection, edgesG, nodesG);
-    else if (model.type === 'tree') renderTree(activeStore, model, positions, selection, edgesG, nodesG);
+    // A selection only renders a halo when its modelPath matches the scope on screen right now
+    // (controller ruling — see sameModelPath above): a selection made inside a different
+    // sub-model, or at the top level while we're drilled into one, must not paint here.
+    const rawSelection = store.get().selection;
+    const selection = sameModelPath(rawSelection?.modelPath, currentModelPath) ? rawSelection : null;
+    if (model.type === 'markov') renderMarkov(model, positions, selection, edgesG, nodesG);
+    else if (model.type === 'tree') renderTree(model, positions, selection, edgesG, nodesG);
   }
 
   function render() {
     const top = store.get().model;
     if (!top) {
+      cancelRename();
       svgEl.replaceChildren();
+      nodeIndex = [];
       renderBreadcrumb();
       return;
     }
@@ -523,7 +773,17 @@ export function createCanvas(svgEl, store, { layoutFor }) {
     buildSvg(model);
   }
 
-  // -------- pan (background drag, select tool only) + wheel zoom to cursor --------
+  // -------- pan / node-move / connect-drag (one unified pointer gesture) + wheel zoom to cursor --------
+  //
+  // Every pointer gesture (background pan, node drag-to-move, Connect-tool drag) is captured on
+  // svgEl itself (never on the individual node/edge, even though it's a node's own pointerdown
+  // that STARTS a node-move/connect gesture — see startGesture) so that pointermove/pointerup
+  // keep firing reliably even if the pointer leaves the node's small hit area mid-drag. Because
+  // capture is always on svgEl, e.target on pointerup is svgEl regardless of what's visually
+  // under the cursor — so the Connect tool's drop target is found via GEOMETRY hit-testing
+  // (hitTestNode) against nodeIndex, never via e.target. This also sidesteps every ambiguity
+  // around native click/dblclick synthesis interacting with pointer capture: nothing in this file
+  // relies on a native 'click' or 'dblclick' event anywhere.
 
   function clientToUser(clientX, clientY) {
     if (typeof svgEl.createSVGPoint !== 'function' || typeof svgEl.getScreenCTM !== 'function') {
@@ -538,37 +798,164 @@ export function createCanvas(svgEl, store, { layoutFor }) {
     return { x: p.x, y: p.y };
   }
 
-  svgEl.addEventListener('pointerdown', (e) => {
-    if (e.target !== svgEl) return; // only the bare background, not a node/edge
-    dragState = { startX: e.clientX, startY: e.clientY, startViewX: view.x, startViewY: view.y, moved: false, pointerId: e.pointerId };
+  function hitTestNode(point) {
+    for (const n of nodeIndex) {
+      const dx = point.x - n.xy[0];
+      const dy = point.y - n.xy[1];
+      if (Math.hypot(dx, dy) <= n.hitR) return n;
+    }
+    return null;
+  }
+
+  function startGesture(e, target) {
+    gesture = {
+      target,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      startViewX: view.x,
+      startViewY: view.y,
+      moved: false,
+      pointerId: e.pointerId,
+    };
+    if (tool === 'connect' && target.domKind === 'node') {
+      gesture.ghostEl = el('path', { class: 'ghost-edge', d: edgePath(target.xy, target.xy, 0) });
+      svgEl.appendChild(gesture.ghostEl);
+    }
     try { svgEl.setPointerCapture(e.pointerId); } catch { /* not supported in this environment */ }
+  }
+
+  function moveNodeEnd(activeStore, target, cur) {
+    const key = target.kind === 'state' ? target.key : target.path.join('/'); // layout-key rule
+    const xy = [Math.round(cur.x), Math.round(cur.y)];
+    runOp(activeStore, (m) => setLayout(m, key, xy));
+  }
+
+  function addOnBackground(activeStore, cur) {
+    const model = activeStore.get().model;
+    if (!model || model.type !== 'markov') return; // tree: empty-space click is a no-op (brief)
+    runOp(activeStore, (m) => {
+      const m1 = addState(m);
+      const added = m1.states[m1.states.length - 1]; // addState always pushes the new state last
+      return setLayout(m1, added.name, [Math.round(cur.x), Math.round(cur.y)]);
+    });
+  }
+
+  function addOnNode(activeStore, target) {
+    const model = activeStore.get().model;
+    if (!model || model.type !== 'tree' || target.kind !== 'node') return; // markov node click: no-op
+    runOp(activeStore, (m) => addChild(m, target.path));
+  }
+
+  function connectDrop(activeStore, fromTarget, cur) {
+    const model = activeStore.get().model;
+    if (!model) return;
+    if (model.type === 'markov') {
+      const hit = hitTestNode(cur);
+      if (!hit) return; // dropped on empty space: silently cancel (no gesture-level self-loop ban —
+                         // A->A IS allowed; ops.addTransition is what actually validates it)
+      runOp(activeStore, (m) => addTransition(m, fromTarget.key, hit.key));
+    } else if (model.type === 'tree') {
+      const hit = hitTestNode(cur);
+      if (hit) { showToast('trees are trees'); return; } // dropped on an existing node: invalid
+      runOp(activeStore, (m) => addChild(m, fromTarget.path));
+    }
+  }
+
+  function endGesture(e) {
+    if (!gesture) return;
+    const g = gesture;
+    gesture = null;
+    try { svgEl.releasePointerCapture(g.pointerId); } catch { /* already released */ }
+    if (g.ghostEl) { try { g.ghostEl.remove(); } catch { /* already detached */ } }
+
+    const cur = clientToUser(e.clientX, e.clientY);
+    const activeStore = scopedStoreFor(store, currentModelPath);
+
+    if (g.target.domKind === 'background') {
+      if (tool === 'select' && !g.moved) activeStore.select({ kind: null, id: null });
+      else if (tool === 'add' && !g.moved) addOnBackground(activeStore, cur);
+      return;
+    }
+
+    if (g.target.domKind === 'edge') {
+      if (g.moved) return; // edges aren't draggable; ignore anything but a plain click
+      if (tool === 'select') {
+        if (g.target.variant === 'markov') {
+          activeStore.select({ kind: 'edge', id: { from: g.target.from, to: g.target.to } });
+        } else {
+          activeStore.select({ kind: 'node', id: g.target.path }); // a tree "edge" IS its child node
+        }
+      } else if (tool === 'delete') {
+        if (g.target.variant === 'markov') runOp(activeStore, (m) => deleteTransition(m, g.target.from, g.target.to));
+        else runOp(activeStore, (m) => deleteNode(m, g.target.path));
+      }
+      return;
+    }
+
+    if (g.target.domKind === 'node') {
+      if (tool === 'select') {
+        if (g.moved) moveNodeEnd(activeStore, g.target, cur);
+        else {
+          const sel = g.target.kind === 'state'
+            ? { kind: 'state', id: g.target.key }
+            : { kind: 'node', id: g.target.path };
+          activeStore.select(sel);
+        }
+      } else if (tool === 'add' && !g.moved) {
+        addOnNode(activeStore, g.target);
+      } else if (tool === 'connect' && g.moved) {
+        connectDrop(activeStore, g.target, cur);
+      } else if (tool === 'delete' && !g.moved) {
+        if (g.target.kind === 'state') runOp(activeStore, (m) => deleteState(m, g.target.key));
+        else runOp(activeStore, (m) => deleteNode(m, g.target.path));
+      }
+    }
+  }
+
+  svgEl.addEventListener('pointerdown', (e) => {
+    if (e.target !== svgEl) return; // only the bare background — nodes/edges stopPropagation()
+    flush();
+    startGesture(e, { domKind: 'background' });
   });
 
   svgEl.addEventListener('pointermove', (e) => {
-    if (!dragState) return;
-    const dxPx = e.clientX - dragState.startX;
-    const dyPx = e.clientY - dragState.startY;
-    if (Math.abs(dxPx) > 3 || Math.abs(dyPx) > 3) dragState.moved = true;
-    if (tool === 'select') {
+    if (!gesture) return;
+    const dxPx = e.clientX - gesture.startClientX;
+    const dyPx = e.clientY - gesture.startClientY;
+    if (Math.abs(dxPx) > 3 || Math.abs(dyPx) > 3) gesture.moved = true;
+
+    if (gesture.target.domKind === 'background' && tool === 'select') {
       const rect = svgEl.getBoundingClientRect();
       const scaleX = rect.width ? view.w / rect.width : 1;
       const scaleY = rect.height ? view.h / rect.height : 1;
-      view.x = dragState.startViewX - dxPx * scaleX;
-      view.y = dragState.startViewY - dyPx * scaleY;
+      view.x = gesture.startViewX - dxPx * scaleX;
+      view.y = gesture.startViewY - dyPx * scaleY;
       applyViewBox();
+      return;
+    }
+
+    if (gesture.target.domKind === 'node' && tool === 'select' && gesture.moved) {
+      const cur = clientToUser(e.clientX, e.clientY);
+      gesture.target.el.setAttribute('transform', `translate(${cur.x},${cur.y})`); // live preview only
+      return;
+    }
+
+    if (gesture.target.domKind === 'node' && tool === 'connect' && gesture.ghostEl) {
+      const cur = clientToUser(e.clientX, e.clientY);
+      gesture.ghostEl.setAttribute('d', edgePath(gesture.target.xy, [cur.x, cur.y], gesture.target.hitR));
     }
   });
 
-  function endDrag(e) {
-    if (!dragState) return;
-    const wasClick = !dragState.moved;
-    try { svgEl.releasePointerCapture(dragState.pointerId); } catch { /* already released */ }
-    dragState = null;
-    // click on empty canvas clears selection (routed through whichever scope is active)
-    if (wasClick) scopedStoreFor(store, currentModelPath).select({ kind: null, id: null });
-  }
-  svgEl.addEventListener('pointerup', (e) => endDrag(e));
-  svgEl.addEventListener('pointercancel', () => { dragState = null; });
+  svgEl.addEventListener('pointerup', endGesture);
+  svgEl.addEventListener('pointercancel', () => {
+    // Same cleanup as cancelGesture(): a cancelled gesture never reaches endGesture, so a
+    // node-move's live-preview transform (set directly via setAttribute during pointermove, with
+    // no setLayout op ever committed) would otherwise stay stuck on screen out of sync with the
+    // model. render() discards it by rebuilding from the model's real (unchanged) layout.
+    if (gesture?.ghostEl) { try { gesture.ghostEl.remove(); } catch { /* ignore */ } }
+    gesture = null;
+    render();
+  });
 
   svgEl.addEventListener('wheel', (e) => {
     e.preventDefault();
@@ -591,7 +978,7 @@ export function createCanvas(svgEl, store, { layoutFor }) {
 
   return {
     render,
-    setTool(t) { tool = t; },
+    setTool,
     currentModelPath,
   };
 }

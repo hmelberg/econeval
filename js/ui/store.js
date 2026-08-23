@@ -8,23 +8,40 @@ import { nodeAt } from './ops.js';
 
 const UNDO_CAP = 100;
 
+// Task 10 (scoped-selection fix, controller ruling): selection carries an optional modelPath
+// (array of sub-model names, chained via model.models) — [] / undefined means the top-level
+// model itself, matching every pre-Task-10 selection (none of which ever set modelPath). Walks
+// model.models along modelPath to find the model the selection's kind/id actually refers to; a
+// missing sub-model anywhere along the way makes the selection invalid, same as a missing
+// state/node/param does today.
+function resolveScopedModel(model, modelPath) {
+  let m = model;
+  for (const name of modelPath ?? []) {
+    if (!m || !m.models || !(name in m.models)) return undefined;
+    m = m.models[name];
+  }
+  return m;
+}
+
 function isSelectionValid(model, selection) {
   if (!selection || selection.kind == null) return true;
+  const scoped = resolveScopedModel(model, selection.modelPath);
+  if (!scoped) return false;
   const { kind, id } = selection;
   if (kind === 'state') {
-    return model.type === 'markov' && model.states.some((s) => s.name === id);
+    return scoped.type === 'markov' && scoped.states.some((s) => s.name === id);
   }
   if (kind === 'edge') {
-    const row = model.transitions[id.from];
+    const row = scoped.transitions[id.from];
     if (!row) return false;
     return row.type === 'multinomial' ? id.to in row.counts : id.to in row.to;
   }
   if (kind === 'node') {
-    if (model.type !== 'tree') return false;
-    try { nodeAt(model, id); return true; } catch { return false; }
+    if (scoped.type !== 'tree') return false;
+    try { nodeAt(scoped, id); return true; } catch { return false; }
   }
   if (kind === 'param') {
-    return model.params.has(id);
+    return scoped.params.has(id);
   }
   return true;
 }

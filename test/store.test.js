@@ -297,6 +297,70 @@ test('undo() when parseError is set reverts the bad buffer instead of consuming 
   assert.equal(s.parseError, null);
 });
 
+// --- Task 10 controller ruling: scoped selection (selection.modelPath). ---
+//
+// A canvas gesture made while the user has drilled into a sub-model (via scopedStore) needs its
+// selection to survive edits made elsewhere in the document, and to be invalidated when the
+// sub-model it points into stops existing — not when some unrelated top-level state of the same
+// name does/doesn't exist. isSelectionValid now resolves the SCOPED model first (by walking
+// model.models along selection.modelPath) and validates kind/id against THAT, not the top-level
+// model. Default modelPath (omitted, i.e. undefined) must keep resolving to the top-level model,
+// so every pre-existing test above (none of which ever set modelPath) is unaffected.
+
+const NESTED_TEXT = `
+econeval: 1
+type: markov
+name: top
+settings: {cycles: 3, start: a}
+states:
+  a: {cost: 0, utility: 1}
+  b: {cost: 0, utility: 1}
+transitions:
+  a: {a: rest, b: 0.1}
+  b: {b: 1}
+models:
+  chronic:
+    type: markov
+    settings: {cycles: 3, start: well}
+    states:
+      well: {cost: 0, utility: 1}
+      sick: {cost: 0, utility: 1}
+    transitions:
+      well: {well: rest, sick: 0.1}
+      sick: {sick: 1}
+`;
+
+test('a scoped selection survives a top-level applyOp that does not touch its sub-model', () => {
+  const store = createStore(NESTED_TEXT);
+  store.select({ kind: 'state', id: 'well', modelPath: ['chronic'] });
+  assert.deepEqual(store.get().selection, { kind: 'state', id: 'well', modelPath: ['chronic'] });
+
+  // Top-level op: adds a state to 'top', never touches models.chronic at all. Under the OLD
+  // (unscoped) isSelectionValid, this would check the TOP-LEVEL model's states for 'well' (not
+  // found there) and wrongly clear the selection.
+  store.applyOp((m) => ops.addState(m));
+
+  assert.deepEqual(store.get().selection, { kind: 'state', id: 'well', modelPath: ['chronic'] });
+});
+
+test('a scoped selection is cleared when the sub-model it points into is itself deleted from models', () => {
+  const store = createStore(NESTED_TEXT);
+  store.select({ kind: 'state', id: 'well', modelPath: ['chronic'] });
+  assert.deepEqual(store.get().selection, { kind: 'state', id: 'well', modelPath: ['chronic'] });
+
+  // No ops.js op deletes a whole sub-model; a raw applyOp fn (same pattern as the earlier
+  // "commits the reparsed model" test's brokenFn) does it directly. Deleting the WHOLE 'chronic'
+  // key round-trips cleanly (model.js only emits `models:` when it's non-empty; normModels treats
+  // a missing `models:` as {}), so this is a legitimate, reparse-clean op.
+  store.applyOp((m) => {
+    const m2 = structuredClone(m);
+    delete m2.models.chronic;
+    return m2;
+  });
+
+  assert.deepEqual(store.get().selection, { kind: null, id: null });
+});
+
 test('setText(bad) then redo() never throws and never leaks bad text onto a stack, with or without a prior redo entry', () => {
   // Case A: nothing to redo at all (redoStack already empty when the bad edit happens).
   const storeA = createStore(GOOD);

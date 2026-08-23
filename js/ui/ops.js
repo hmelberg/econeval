@@ -210,8 +210,14 @@ export function setStatePayoff(model, name, key, value) {
   return m;
 }
 
+// Task 10 fix: setLayout works on BOTH model types — its body only ever touches the generic
+// m.layout map (never states/transitions/tree), and the layout-key rule (constraints.md) is
+// itself generic: state names for markov, '/'-joined node paths for trees. The Select tool's
+// node-drag gesture needs this to work identically for tree nodes as for markov states; there is
+// no tree-specific variant of this op anywhere else in the file. (Originally written markov-only
+// in Task 3, before Task 4 added tree editing — this was a gap, not a deliberate restriction; no
+// test asserted the old assertMarkov guard.)
 export function setLayout(model, key, xy) {
-  assertMarkov(model, 'setLayout');
   const m = clone(model);
 
   if (xy === null) {

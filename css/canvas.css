@@ -103,3 +103,70 @@
   margin: 0 4px;
   color: var(--muted);
 }
+
+/* ---------- Tool cursors (Task 10) ---------- */
+
+/* Add tool: markov click-anywhere adds a state, so the whole canvas hints "place something
+   here". On a tree, only clicking an existing node adds a child (empty space is a no-op) — so
+   the crosshair is scoped to nodes only, per the brief. */
+#canvas[data-tool="add"] {
+  cursor: crosshair;
+}
+#canvas[data-tool="add"][data-model-type="tree"] {
+  cursor: default;
+}
+#canvas[data-tool="add"][data-model-type="tree"] .node {
+  cursor: crosshair;
+}
+#canvas[data-tool="connect"] .node {
+  cursor: crosshair;
+}
+#canvas[data-tool="delete"] .node,
+#canvas[data-tool="delete"] .edge {
+  cursor: not-allowed;
+}
+
+/* ---------- Ghost edge (Connect tool drag preview) ---------- */
+
+#canvas .ghost-edge {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+  pointer-events: none;
+}
+
+/* ---------- Inline rename (foreignObject over a node) ---------- */
+
+#canvas .rename-fo {
+  overflow: visible;
+}
+#canvas .rename-input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  font-family: var(--font-ui);
+  font-size: var(--fs-1);
+  color: var(--ink);
+  background: var(--surface);
+  border: 1.5px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 2px 4px;
+}
+
+/* ---------- Toast strip (transient op-error messages; "errors surfaced, never swallowed") ---------- */
+
+#canvas-toast {
+  position: absolute;
+  left: 50%;
+  bottom: var(--sp-3);
+  transform: translateX(-50%);
+  max-width: 80%;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--danger);
+  color: #fff;
+  font-size: var(--fs-1);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-pop);
+  z-index: 5;
+}
