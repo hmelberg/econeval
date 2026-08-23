@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>econeval</title>
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="css/canvas.css">
+<script type="importmap">{"imports": {"js-yaml": "./js/vendor/js-yaml.mjs"}}</script>
+<script type="module" src="js/ui/app.js"></script>
+</head>
+<body>
+<header id="topbar">
+  <span id="brand">econeval</span>
+  <span id="model-name" contenteditable="false"></span><span id="type-badge"></span>
+  <nav id="actions">
+    <button id="btn-new">New</button> <button id="btn-open">Open</button>
+    <button id="btn-save">Save version</button> <button id="btn-examples">Examples</button>
+    <button id="btn-import">Import</button> <button id="btn-export">Export</button>
+    <button id="btn-yaml" aria-pressed="false">YAML</button>
+  </nav>
+</header>
+<main id="workspace">
+  <aside id="pane-yaml" class="panel" hidden><div class="panel-head">YAML<span class="panel-ctl"></span></div><textarea id="yaml-text" spellcheck="false"></textarea><div id="yaml-error" hidden></div></aside>
+  <div class="splitter" id="split-l" role="separator" aria-orientation="vertical" tabindex="0"></div>
+  <section id="pane-canvas" class="panel"><div id="canvas-toolbar"></div><div id="breadcrumb" hidden></div><svg id="canvas"></svg></section>
+  <div class="splitter" id="split-r" role="separator" aria-orientation="vertical" tabindex="0"></div>
+  <aside id="pane-inspector" class="panel"><div class="panel-head" id="inspector-tabs"></div><div id="inspector-body"></div></aside>
+</main>
+<dialog id="dlg-open"></dialog>
+</body>
+</html>

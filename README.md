@@ -6,7 +6,28 @@ declarative YAML model format. Spec: `docs/superpowers/specs/2026-08-23-econeval
 Status: phase 1 (compute core) complete — parsing, expressions, distributions, the Markov
 and tree engines, CEA/DSA/PSA analyses, and validation are all implemented and covered by
 `npm test` (97 tests), including two golden examples cross-checked against independent
-reference implementations (`test/golden.test.js`). No UI yet.
+reference implementations (`test/golden.test.js`). Phase 2 (editor) is underway: the static
+shell (`index.html`, import map, vendored `js-yaml`) is live; canvas/inspector/YAML-pane
+wiring is not yet built.
+
+## Run locally
+
+The app is plain static files — ES module imports and `fetch` need real HTTP, not
+`file://`. From the repo root:
+
+```sh
+python3 -m http.server 8000
+```
+
+then open http://localhost:8000. (`npx serve` works too.) After editing anything under
+`js/` or `css/`, hard-reload the page — Chrome caches those aggressively.
+
+## Live
+
+https://econeval.netlify.app
+
+Pending: custom domain `econeval.melberg.app` (Netlify dashboard work — DNS is not touched
+by this repo's tooling).
 
 ## Model format at a glance
 
