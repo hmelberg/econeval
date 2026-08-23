@@ -125,6 +125,23 @@ button:active {
   overflow: hidden;
 }
 
+/* A maximized pane fills the workspace under the topbar; the other two panes and both
+   splitters disappear entirely (Task 8). */
+#workspace[data-max] {
+  grid-template-columns: 1fr;
+}
+#workspace[data-max] .splitter {
+  display: none;
+}
+#workspace[data-max="yaml"] #pane-canvas,
+#workspace[data-max="yaml"] #pane-inspector,
+#workspace[data-max="canvas"] #pane-yaml,
+#workspace[data-max="canvas"] #pane-inspector,
+#workspace[data-max="inspector"] #pane-yaml,
+#workspace[data-max="inspector"] #pane-canvas {
+  display: none;
+}
+
 /* ---------- Splitters ---------- */
 
 .splitter {
@@ -137,6 +154,15 @@ button:active {
 .splitter:hover,
 .splitter:focus-visible {
   background: var(--accent-soft);
+}
+.splitter.dragging {
+  background: var(--accent);
+}
+/* Explicit, mirroring #pane-yaml[hidden] below — panels.js hides #split-l whenever the yaml pane
+   is closed (or either splitter during a maximized state) and must also drop it from the tab
+   order; [hidden] alone should already do that per the HTML spec, but this removes any doubt. */
+.splitter[hidden] {
+  display: none;
 }
 
 /* ---------- Panels ---------- */
@@ -182,6 +208,45 @@ button:active {
   align-items: center;
   justify-content: center;
   font-size: var(--fs-1);
+}
+.panel-ctl button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ---------- Minimized panel strip (28px, Task 8) ---------- */
+
+/* panels.js sets --w-yaml/--w-insp to 28px for a minimized pane and toggles [data-min] on it; the
+   pane's own body (everything but its .panel-head) is hidden, and the head becomes a vertical,
+   clickable/keyboard-operable strip that restores the pane on activation. */
+.panel[data-min] > *:not(.panel-head) {
+  display: none;
+}
+.panel[data-min] .panel-head {
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  height: 100%;
+  padding: var(--sp-2) 0;
+  cursor: pointer;
+  border-bottom: none;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+}
+/* Real children (the panel-ctl buttons; the inspector's future tab buttons) have no room in a
+   28px strip — the strip itself is the only control, carrying its own aria-label/role/tabindex
+   (set by panels.js only while minimized, so it's never a stray tab-stop otherwise). */
+.panel[data-min] .panel-head > * {
+  display: none;
+}
+/* Inspector's panel-head (#inspector-tabs) has no static text of its own — supply the strip
+   label from CSS so it doesn't depend on whatever Task 11 renders inside it. */
+#pane-inspector[data-min] .panel-head::before {
+  content: "Inspector";
+  font-size: var(--fs-1);
+  color: var(--muted);
+  letter-spacing: .04em;
 }
 
 /* ---------- YAML pane ---------- */
@@ -235,6 +300,11 @@ button:active {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+#canvas-toolbar button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 #breadcrumb {
