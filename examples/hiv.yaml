@@ -1,0 +1,75 @@
+econeval: 1
+type: markov
+name: HIV combination therapy
+
+# Chancellor et al. 1997 ("Modelling the cost effectiveness of lamivudine/zidovudine
+# combination therapy in HIV infection", PharmacoEconomics) — the classic HTA teaching
+# model, reproduced here as heemod's `c_homogeneous` vignette reproduces it. Cohort of
+# 1000 CD4-count-defined patients tracked yearly through three disease states (A = least
+# severe, C = most severe) to death. Effectiveness is measured in life-years, so every
+# living state carries utility 1 and no separate quality weighting is applied.
+
+meta:
+  author: Chancellor et al. 1997
+  references:
+    - Chancellor JV, Coyle D, Drummond MF. Modelling the cost effectiveness of
+      lamivudine/zidovudine combination therapy in HIV infection. PharmacoEconomics 1997.
+
+settings:
+  cycles: 20
+  cycle: 1 year
+  discount: {cost: 0.06, effect: 0}
+  correction: none
+  start: A
+  wtp: 30000
+  psa: {n: 1000, seed: 42}
+
+params:
+  # Observed one-year transition counts out of a cohort of 1000 (Chancellor 1997, Table 2);
+  # beta priors use the raw counts as (successes, failures) so the deterministic value
+  # (0.202 etc.) equals the beta mean by construction.
+  p_AB:
+    value: 0.202
+    dist: beta(202, 798)
+    source: Chancellor 1997
+  p_AC:
+    value: 0.067
+    dist: beta(67, 933)
+    source: Chancellor 1997
+  p_AD:
+    value: 0.010
+    dist: beta(10, 990)
+    source: Chancellor 1997
+  p_BC:
+    value: 0.407
+    dist: beta(407, 593)
+    source: Chancellor 1997
+  p_BD:
+    value: 0.012
+    dist: beta(12, 988)
+    source: Chancellor 1997
+  p_CD:
+    value: 0.250
+    dist: beta(250, 750)
+    source: Chancellor 1997
+
+  rr: 1                         # base (comparator, mono) params describe no treatment effect
+  c_drug: 2278                  # zidovudine (AZT) monotherapy, annual drug cost
+
+states:
+  A:     {cost: 2756 + c_drug, utility: 1}
+  B:     {cost: 3052 + c_drug, utility: 1}
+  C:     {cost: 9007 + c_drug, utility: 1}
+  death: {cost: 0, utility: 0}
+
+transitions:
+  A:     {A: rest, B: p_AB * rr, C: p_AC * rr, death: p_AD * rr}
+  B:     {B: rest, C: p_BC * rr, death: p_BD * rr}
+  C:     {C: rest, death: p_CD * rr}
+  death: {death: 1}
+
+strategies:
+  mono: {}                      # comparator: zidovudine monotherapy, params as declared
+  combo:                        # lamivudine added to zidovudine
+    c_drug: 2278 + 2086         # + lamivudine annual drug cost
+    rr: 0.509                   # combination therapy's relative risk of progression

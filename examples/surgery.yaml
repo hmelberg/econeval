@@ -1,0 +1,19 @@
+econeval: 1
+type: tree
+name: Surgery vs medication
+
+params:
+  p_success_surg:
+    value: 0.9
+    dist: beta(90, 10)
+
+tree:
+  Treatment?:                   # root = decision node; its children are the strategies
+    Surgery:
+      cost: 5000
+      Success: {p: p_success_surg, utility: 0.95}
+      Failure: {p: rest, utility: 0.40, cost: 2000}
+    Medication:
+      cost: 800
+      Success: {p: 0.60, utility: 0.90}
+      Failure: {p: rest, utility: 0.50}
