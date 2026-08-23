@@ -271,3 +271,167 @@ test('loadLayout never throws even if the storage backend does', () => {
   assert.doesNotThrow(() => loadLayout(angryStorage));
   assert.deepEqual(loadLayout(angryStorage), defaultLayoutState());
 });
+
+// --- results drawer (phase-3 task 1) ---
+
+test('defaultLayoutState: results starts closed, h 300, not minimized', () => {
+  const s = defaultLayoutState();
+  assert.deepEqual(s.results, { h: 300, open: false, min: false });
+});
+
+// --- drag-results clamps at both bounds (required) ---
+
+test('drag-results: clamps at the lower bound (160)', () => {
+  const s = defaultLayoutState();
+  const next = nextLayoutState(s, { type: 'drag-results', dy: 10000 });
+  assert.equal(next.results.h, PANE_BOUNDS.results.min);
+});
+
+test('drag-results: clamps at the upper bound (600)', () => {
+  const s = defaultLayoutState();
+  const next = nextLayoutState(s, { type: 'drag-results', dy: -10000 });
+  assert.equal(next.results.h, PANE_BOUNDS.results.max);
+});
+
+test('drag-results: a small in-bounds delta is not clamped, and does not mutate the input state', () => {
+  const s = defaultLayoutState();
+  // dy negative (drag up) grows the drawer, same sign convention as the right splitter's dx.
+  const next = nextLayoutState(s, { type: 'drag-results', dy: -20 });
+  assert.equal(next.results.h, 320);
+  assert.equal(s.results.h, 300); // original untouched
+});
+
+// --- toggle-results reopens at last h (required) ---
+
+test('toggle-results: opens the (default-closed) drawer at its default height (300)', () => {
+  const s = defaultLayoutState();
+  assert.equal(s.results.open, false);
+  const next = nextLayoutState(s, { type: 'toggle-results' });
+  assert.equal(next.results.open, true);
+  assert.equal(next.results.h, 300);
+});
+
+test('toggle-results: closing then reopening restores the last dragged height, not the default', () => {
+  let s = defaultLayoutState();
+  s = nextLayoutState(s, { type: 'toggle-results' }); // open at 300
+  s = nextLayoutState(s, { type: 'drag-results', dy: -100 }); // -> 400
+  assert.equal(s.results.h, 400);
+  s = nextLayoutState(s, { type: 'toggle-results' }); // close
+  assert.equal(s.results.open, false);
+  assert.equal(s.results.h, 400); // height preserved while closed
+  s = nextLayoutState(s, { type: 'toggle-results' }); // reopen
+  assert.equal(s.results.open, true);
+  assert.equal(s.results.h, 400); // reopened at last height, not reset to the 300 default
+});
+
+test('toggle-results: closing clears a minimized flag and un-maximizes results (no orphaned collapsed state)', () => {
+  let s = defaultLayoutState();
+  s = nextLayoutState(s, { type: 'toggle-results' }); // open
+  s = nextLayoutState(s, { type: 'minimize', pane: 'results' });
+  assert.equal(s.results.min, true);
+  s = nextLayoutState(s, { type: 'toggle-results' }); // close
+  assert.equal(s.results.open, false);
+  assert.equal(s.results.min, false);
+});
+
+// --- maximize 'results' / restore (required) ---
+
+test('maximize/restore: maximize(results) sets state.maximized, restore clears it back to the original state', () => {
+  let s = defaultLayoutState();
+  s = nextLayoutState(s, { type: 'toggle-results' }); // open first, so restore lands back here exactly
+  const maxed = nextLayoutState(s, { type: 'maximize', pane: 'results' });
+  assert.equal(maxed.maximized, 'results');
+  const restored = nextLayoutState(maxed, { type: 'restore' });
+  assert.deepEqual(restored, s);
+});
+
+test('maximize: maximizing the results drawer also opens it and clears its minimized flag', () => {
+  const s = defaultLayoutState(); // results closed
+  const maxed = nextLayoutState(s, { type: 'maximize', pane: 'results' });
+  assert.equal(maxed.maximized, 'results');
+  assert.equal(maxed.results.open, true);
+  assert.equal(maxed.results.min, false);
+});
+
+test('maximize(results) when already maximized -> restore (required contract line, verbatim)', () => {
+  const s = defaultLayoutState();
+  const maxed = nextLayoutState(s, { type: 'maximize', pane: 'results' });
+  assert.equal(maxed.maximized, 'results');
+  const toggledOff = nextLayoutState(maxed, { type: 'maximize', pane: 'results' });
+  assert.equal(toggledOff.maximized, null);
+});
+
+// --- minimize results on maximized restores first (required) ---
+
+test('minimize a maximized results drawer: restores first, then minimizes', () => {
+  const s = defaultLayoutState();
+  const maxed = nextLayoutState(s, { type: 'maximize', pane: 'results' });
+  assert.equal(maxed.maximized, 'results');
+  const next = nextLayoutState(maxed, { type: 'minimize', pane: 'results' });
+  assert.equal(next.maximized, null); // restored first
+  assert.equal(next.results.min, true); // then minimized
+});
+
+test('minimize(results): toggles back off (un-minimizes) on a second call — the strip-click restore path', () => {
+  let s = defaultLayoutState();
+  s = nextLayoutState(s, { type: 'minimize', pane: 'results' });
+  assert.equal(s.results.min, true);
+  s = nextLayoutState(s, { type: 'minimize', pane: 'results' });
+  assert.equal(s.results.min, false);
+});
+
+// --- serialize/parse round-trip includes results (required) ---
+
+test('serialize/parse round-trip: results survives unchanged alongside yaml/insp/tab', () => {
+  let s = defaultLayoutState();
+  s = nextLayoutState(s, { type: 'toggle-results' });
+  s = nextLayoutState(s, { type: 'drag-results', dy: -50 });
+  s = { ...s, tab: 'parameters' };
+  const json = serializeLayout(s);
+  const parsed = parseLayout(json);
+  assert.deepEqual(parsed, s);
+  assert.deepEqual(parsed.results, { h: 350, open: true, min: false });
+});
+
+test('parseLayout: an out-of-range stored results height is clamped back into bounds on load', () => {
+  const stale = JSON.stringify({ results: { h: 1, open: true, min: false } });
+  const parsed = parseLayout(stale);
+  assert.equal(parsed.results.h, PANE_BOUNDS.results.min);
+});
+
+test('parseLayout: an invalid maximized value of "results" is accepted (a valid pane id)', () => {
+  const blob = JSON.stringify({ maximized: 'results' });
+  assert.equal(parseLayout(blob).maximized, 'results');
+});
+
+// --- parseLayout backward-compat: phase-2 blob (no results field) parses to defaults, not null ---
+
+test('parseLayout: a phase-2 blob without a results field parses results to defaults (backward compat)', () => {
+  const phase2Blob = JSON.stringify({
+    yaml: { w: 320, open: true, min: false },
+    insp: { w: 280, min: false },
+    maximized: null,
+    tab: 'parameters',
+  });
+  const parsed = parseLayout(phase2Blob);
+  assert.notEqual(parsed, null);
+  assert.deepEqual(parsed.results, defaultLayoutState().results);
+  // fields that WERE present in the phase-2 blob still round-trip correctly
+  assert.equal(parsed.yaml.w, 320);
+  assert.equal(parsed.yaml.open, true);
+  assert.equal(parsed.insp.w, 280);
+  assert.equal(parsed.tab, 'parameters');
+});
+
+test('loadLayout: a phase-2 blob (no results key) in storage loads with results defaulted', () => {
+  const storage = fakeStorage();
+  const phase2Blob = JSON.stringify({
+    yaml: { w: 300, open: false, min: false },
+    insp: { w: 300, min: false },
+    maximized: null,
+    tab: 'selection',
+  });
+  storage.setItem(LAYOUT_KEY, phase2Blob);
+  const loaded = loadLayout(storage);
+  assert.deepEqual(loaded.results, defaultLayoutState().results);
+});

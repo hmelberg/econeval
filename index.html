@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="css/app.css">
 <link rel="stylesheet" href="css/canvas.css">
 <script type="importmap">{"imports": {"js-yaml": "./js/vendor/js-yaml.mjs"}}</script>
+<script defer src="js/vendor/plotly.min.js"></script>
 <script type="module" src="js/ui/app.js"></script>
 </head>
 <body>
@@ -19,6 +20,7 @@
     <button id="btn-save">Save version</button> <button id="btn-examples">Examples</button>
     <button id="btn-import">Import</button> <button id="btn-export">Export</button>
     <button id="btn-yaml" aria-pressed="false">YAML</button>
+    <button id="btn-run">Run</button>
   </nav>
 </header>
 <main id="workspace">
@@ -27,6 +29,8 @@
   <section id="pane-canvas" class="panel"><div id="canvas-toolbar"></div><div id="breadcrumb" hidden></div><div id="canvas-toast" role="status" hidden></div><svg id="canvas"></svg></section>
   <div class="splitter" id="split-r" role="separator" aria-orientation="vertical" tabindex="0"></div>
   <aside id="pane-inspector" class="panel"><div class="panel-head" id="inspector-tabs"></div><div id="inspector-body"></div></aside>
+  <div class="splitter" id="split-b" role="separator" aria-orientation="horizontal" tabindex="0"></div>
+  <section id="pane-results" class="panel" hidden><div class="panel-head">Results<span class="panel-ctl"></span></div><div id="results-tabs"></div><div id="results-body"></div></section>
 </main>
 <dialog id="dlg-new"></dialog>
 <dialog id="dlg-open"></dialog>

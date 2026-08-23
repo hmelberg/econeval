@@ -16,6 +16,10 @@
   --accent-soft: #E4F2F0;
   --danger: #B42334;
   --warn: #B45309;
+  /* chart series palette — validated for CVD/chroma/lightness/contrast (dataviz pass, binding);
+     strategy N gets --chart-N by declaration order, never by rank; a 7th+ strategy folds into
+     muted gray with a legend note instead of a generated hue. */
+  --chart-1: #00806B; --chart-2: #3B5BD9; --chart-3: #C2611E; --chart-4: #8A4E9E; --chart-5: #6B7F1F; --chart-6: #C64B7E;
   --radius: 6px; --radius-sm: 4px;
   --font-ui: system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-data: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
@@ -28,6 +32,7 @@
   --bg:#131518; --surface:#1B1E23; --paper:#1F2328; --dot:#2A2F36; --ink:#E7E9EC;
   --muted:#9AA1AA; --line:#2A2E34; --accent:#2FA795; --accent-soft:#16332F;
   --danger:#E5484D; --warn:#D97706; --shadow-pop: 0 4px 16px rgba(0,0,0,.5);
+  --chart-1: #2FA795; --chart-2: #7089E8; --chart-3: #D07C35; --chart-4: #AF7BCB; --chart-5: #879A2E; --chart-6: #C9688F;
 }}
 
 :root[data-theme="dark"] {
@@ -43,6 +48,7 @@
   --danger: #E5484D;
   --warn: #D97706;
   --shadow-pop: 0 4px 16px rgba(0,0,0,.5);
+  --chart-1: #2FA795; --chart-2: #7089E8; --chart-3: #D07C35; --chart-4: #AF7BCB; --chart-5: #879A2E; --chart-6: #C9688F;
 }
 
 :root[data-theme="light"] { color-scheme: light; }

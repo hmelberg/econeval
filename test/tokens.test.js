@@ -66,6 +66,12 @@ const LIGHT_EXPECTED = {
   'sp-4': '16px',
   'sp-5': '24px',
   'shadow-pop': '0 4px 16px rgba(0,0,0,.12)',
+  'chart-1': '#00806B',
+  'chart-2': '#3B5BD9',
+  'chart-3': '#C2611E',
+  'chart-4': '#8A4E9E',
+  'chart-5': '#6B7F1F',
+  'chart-6': '#C64B7E',
 };
 
 const DARK_EXPECTED = {
@@ -81,6 +87,12 @@ const DARK_EXPECTED = {
   danger: '#E5484D',
   warn: '#D97706',
   'shadow-pop': '0 4px 16px rgba(0,0,0,.5)',
+  'chart-1': '#2FA795',
+  'chart-2': '#7089E8',
+  'chart-3': '#D07C35',
+  'chart-4': '#AF7BCB',
+  'chart-5': '#879A2E',
+  'chart-6': '#C9688F',
 };
 
 test('tokens.css: light :root block has every binding token, byte-exact', () => {

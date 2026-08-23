@@ -103,12 +103,15 @@ button:active {
   background: var(--accent-soft);
 }
 
-#btn-save {
+/* Run is the primary action (phase-3): it triggers the analyses that fill the results drawer.
+   Save version reverts to the default quiet button styling below it — it's a secondary action
+   now. */
+#btn-run {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
 }
-#btn-save:hover {
+#btn-run:hover {
   background: var(--accent);
   border-color: var(--accent);
   opacity: .92;
@@ -127,40 +130,57 @@ button:active {
   min-height: 0;
   display: grid;
   grid-template-columns: var(--w-yaml, 0px) 4px 1fr 4px var(--w-insp, 300px);
+  /* Row 1 holds the yaml/canvas/inspector row (unchanged); row 2 is #split-b; row 3 is the
+     results drawer, closed to 0px height by default. */
+  grid-template-rows: minmax(0,1fr) 4px var(--h-results, 0px);
   overflow: hidden;
 }
 
-/* Explicit column assignment, matching the 5 tracks above 1:1. Without this, CSS grid
-   auto-placement packs surviving items into the FIRST available columns whenever an earlier
+/* Explicit column+row assignment, matching the tracks above 1:1. Without this, CSS grid
+   auto-placement packs surviving items into the FIRST available columns/rows whenever an earlier
    sibling leaves the flow (display:none) — and #pane-yaml/#split-l are display:none by default
    (yaml pane starts closed), which without this rule silently shoves #pane-canvas into the
-   0px-wide yaml track and #pane-inspector into the 1fr canvas track on every normal boot. */
-#pane-yaml   { grid-column: 1; }
-#split-l     { grid-column: 2; }
-#pane-canvas { grid-column: 3; }
-#split-r     { grid-column: 4; }
-#pane-inspector { grid-column: 5; }
+   0px-wide yaml track and #pane-inspector into the 1fr canvas track on every normal boot. The
+   results row spans every column (grid-column: 1 / -1) since it sits below the whole 5-column
+   row, not alongside one column of it. */
+#pane-yaml   { grid-column: 1; grid-row: 1; }
+#split-l     { grid-column: 2; grid-row: 1; }
+#pane-canvas { grid-column: 3; grid-row: 1; }
+#split-r     { grid-column: 4; grid-row: 1; }
+#pane-inspector { grid-column: 5; grid-row: 1; }
+#split-b     { grid-column: 1 / -1; grid-row: 2; }
+#pane-results { grid-column: 1 / -1; grid-row: 3; }
 
-/* A maximized pane fills the workspace under the topbar; the other two panes and both
-   splitters disappear entirely (Task 8). */
+/* A maximized pane fills the workspace under the topbar; every other pane and every splitter
+   (including #split-b/#pane-results) disappear entirely (Task 8; extended for 'results' phase-3
+   task 1). */
 #workspace[data-max] {
   grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
 }
-/* Maximized: only one .panel stays visible, but it still carries its normal grid-column (1/3/5)
-   from the rule above — force it back into the single 1fr track defined here (higher specificity:
-   an attribute + a class beats a bare ID), or it would land in an implicit, ~0-width auto track. */
+/* Maximized: only one .panel stays visible, but it still carries its normal grid-column/grid-row
+   from the rules above — force it back into the single 1fr/1fr track defined here (higher
+   specificity: an attribute + a class beats a bare ID), or it would land in an implicit,
+   ~0-sized auto track. */
 #workspace[data-max] > .panel {
   grid-column: 1;
+  grid-row: 1;
 }
 #workspace[data-max] .splitter {
   display: none;
 }
 #workspace[data-max="yaml"] #pane-canvas,
 #workspace[data-max="yaml"] #pane-inspector,
+#workspace[data-max="yaml"] #pane-results,
 #workspace[data-max="canvas"] #pane-yaml,
 #workspace[data-max="canvas"] #pane-inspector,
+#workspace[data-max="canvas"] #pane-results,
 #workspace[data-max="inspector"] #pane-yaml,
-#workspace[data-max="inspector"] #pane-canvas {
+#workspace[data-max="inspector"] #pane-canvas,
+#workspace[data-max="inspector"] #pane-results,
+#workspace[data-max="results"] #pane-yaml,
+#workspace[data-max="results"] #pane-canvas,
+#workspace[data-max="results"] #pane-inspector {
   display: none;
 }
 
@@ -172,6 +192,13 @@ button:active {
   background: transparent;
   cursor: col-resize;
   transition: background-color 120ms;
+}
+/* #split-b is the one horizontal splitter (drawer boundary) — flip its box to a full-width,
+   4px-tall row-resize handle instead of the vertical col-resize bar the rest of .splitter is. */
+#split-b {
+  width: 100%;
+  height: 4px;
+  cursor: row-resize;
 }
 .splitter:hover,
 .splitter:focus-visible {
@@ -202,6 +229,7 @@ button:active {
 /* Explicit — a [hidden] element inside a flex/grid ancestor can otherwise lose
    to a later class rule (author cascade beats the UA [hidden] default). */
 #pane-yaml[hidden] { display: none; }
+#pane-results[hidden] { display: none; }
 
 .panel-head {
   flex: 0 0 auto;
@@ -269,6 +297,19 @@ button:active {
   font-size: var(--fs-1);
   color: var(--muted);
   letter-spacing: .04em;
+}
+
+/* #pane-results is a bottom drawer, not a side panel — its minimized strip stays a normal
+   horizontal bar (own literal "Results" text, like yaml's) rather than the vertical-rl rotated
+   text the side panels use above; only height/orientation are overridden, not the [data-min]
+   "hide everything but the head" behavior itself. */
+#pane-results[data-min] .panel-head {
+  flex-direction: row;
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+  height: 100%;
+  padding: 0 var(--sp-3);
+  justify-content: flex-start;
 }
 
 /* ---------- YAML pane ---------- */

@@ -58,10 +58,12 @@ test('surgery tree: exact hand-computed results', () => {
   assert.ok(Math.abs(rows.find(x => x.strategy === 'Surgery').icer - 4400 / 0.155) < 1e-6);
 });
 
-test('no Math.random anywhere under js/', async () => {
+test('no Math.random anywhere under js/ (excluding js/vendor — third-party code we don\'t author)', async () => {
   const { readdirSync, readFileSync: read } = await import('node:fs');
   const walk = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap(e =>
     e.isDirectory() ? walk(`${dir}/${e.name}`) : [`${dir}/${e.name}`]);
-  for (const f of walk(new URL('../js', import.meta.url).pathname))
+  for (const f of walk(new URL('../js', import.meta.url).pathname)) {
+    if (f.includes('/js/vendor/')) continue; // vendored libs (js-yaml, plotly) aren't ours to constrain
     assert.ok(!read(f, 'utf8').includes('Math.random'), `${f} uses Math.random`);
+  }
 });
