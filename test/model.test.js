@@ -138,3 +138,15 @@ test('structural errors: missing name/cycles/states, unknown type', () => {
   assert.throws(() => parseModel('econeval: 1\ntype: markov\nname: x\nstates: {a: {utility: 1}}\ntransitions: {a: {a: 1}}'), /cycles/);
   assert.throws(() => parseModel('econeval: 1\ntype: markov\nname: x\nsettings: {cycles: 1}'), /states/);
 });
+
+test('params must be a mapping, not e.g. a bare string', () => {
+  assert.throws(() => parseModel(`
+econeval: 1
+type: markov
+name: x
+settings: {cycles: 1}
+params: "oops"
+states: {a: {utility: 1}}
+transitions: {a: {a: 1}}
+`), /params/);
+});

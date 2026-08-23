@@ -205,8 +205,11 @@ export function normalizeModel(obj) {
   };
 
   // --- params ---
+  const rawParams = obj.params ?? {};
+  if (typeof rawParams !== 'object' || rawParams === null || Array.isArray(rawParams))
+    throw new ModelError('params: must be a mapping of param name to value', { path: 'params' });
   const params = new Map();
-  for (const [pname, pval] of Object.entries(obj.params ?? {})) {
+  for (const [pname, pval] of Object.entries(rawParams)) {
     params.set(pname, normParam(pname, pval));
   }
 
