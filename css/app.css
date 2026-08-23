@@ -63,6 +63,11 @@ button, input, textarea, select {
 #model-name[contenteditable="true"]:not(:focus-visible) {
   outline: 1px dashed var(--line);
 }
+#model-name.dirty::after {
+  content: "\2022";
+  color: var(--accent);
+  margin-left: var(--sp-1);
+}
 
 #type-badge {
   font-size: var(--fs-0);
@@ -125,10 +130,27 @@ button:active {
   overflow: hidden;
 }
 
+/* Explicit column assignment, matching the 5 tracks above 1:1. Without this, CSS grid
+   auto-placement packs surviving items into the FIRST available columns whenever an earlier
+   sibling leaves the flow (display:none) — and #pane-yaml/#split-l are display:none by default
+   (yaml pane starts closed), which without this rule silently shoves #pane-canvas into the
+   0px-wide yaml track and #pane-inspector into the 1fr canvas track on every normal boot. */
+#pane-yaml   { grid-column: 1; }
+#split-l     { grid-column: 2; }
+#pane-canvas { grid-column: 3; }
+#split-r     { grid-column: 4; }
+#pane-inspector { grid-column: 5; }
+
 /* A maximized pane fills the workspace under the topbar; the other two panes and both
    splitters disappear entirely (Task 8). */
 #workspace[data-max] {
   grid-template-columns: 1fr;
+}
+/* Maximized: only one .panel stays visible, but it still carries its normal grid-column (1/3/5)
+   from the rule above — force it back into the single 1fr track defined here (higher specificity:
+   an attribute + a class beats a bare ID), or it would land in an implicit, ~0-width auto track. */
+#workspace[data-max] > .panel {
+  grid-column: 1;
 }
 #workspace[data-max] .splitter {
   display: none;
@@ -577,9 +599,102 @@ dialog {
   border-radius: var(--radius);
   box-shadow: var(--shadow-pop);
   padding: var(--sp-4);
+  width: min(480px, 92vw);
+  max-height: 80vh;
+  overflow-y: auto;
 }
 dialog::backdrop {
   background: rgba(0, 0, 0, .3);
+}
+
+.dlg-title {
+  font-size: var(--fs-3);
+  font-weight: 600;
+  margin: 0 0 var(--sp-3);
+}
+.dlg-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.dlg-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+}
+
+/* New: template choice */
+.dlg-template-btn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--sp-3);
+}
+.dlg-template-btn strong {
+  display: block;
+  font-size: var(--fs-2);
+  margin-bottom: 2px;
+}
+.dlg-template-btn span {
+  display: block;
+  font-size: var(--fs-1);
+  color: var(--muted);
+}
+
+/* Open: registry list */
+.dlg-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.dlg-list-item {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--sp-2) var(--sp-3);
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  grid-template-areas: "name load del" "meta select select";
+  gap: var(--sp-1) var(--sp-2);
+  align-items: center;
+}
+.dlg-list-name {
+  grid-area: name;
+  font-size: var(--fs-2);
+}
+.dlg-list-meta {
+  grid-area: meta;
+  font-size: var(--fs-0);
+  color: var(--muted);
+  font-family: var(--font-data);
+}
+.dlg-list-item select {
+  grid-area: select;
+  width: 100%;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-1);
+  font-family: var(--font-data);
+}
+.dlg-list-item .dlg-load-btn {
+  grid-area: load;
+}
+.dlg-list-item .dlg-del-btn {
+  grid-area: del;
+}
+
+/* Examples list */
+.dlg-example-btn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--sp-2) var(--sp-3);
 }
 
 /* ---------- Reduced motion ---------- */

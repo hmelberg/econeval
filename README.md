@@ -3,12 +3,28 @@
 Health economic evaluation in the browser: decision trees and Markov models with a
 declarative YAML model format. Spec: `docs/superpowers/specs/2026-08-23-econeval-design.md`.
 
-Status: phase 1 (compute core) complete — parsing, expressions, distributions, the Markov
-and tree engines, CEA/DSA/PSA analyses, and validation are all implemented and covered by
-`npm test` (97 tests), including two golden examples cross-checked against independent
-reference implementations (`test/golden.test.js`). Phase 2 (editor) is underway: the static
-shell (`index.html`, import map, vendored `js-yaml`) is live; canvas/inspector/YAML-pane
-wiring is not yet built.
+Status: phase 1 (compute core) and phase 2 (editor) are both complete, covered by `npm test`
+(274 tests), including two golden examples cross-checked against independent reference
+implementations (`test/golden.test.js`). The editor is a browser-based canvas + YAML editor
+for the same model format the compute core runs:
+
+- **Two-way YAML sync** — a live document store (undo/redo, selection) with a debounced YAML
+  textarea; edits from either side (canvas, inspector, or hand-typed YAML) stay in sync, and
+  a broken YAML edit shows an inline error (line + hint) without losing canvas state.
+- **Publication-figure canvas** — auto-layout markov rings and tidy decision trees, drawn as
+  ink-stroke nodes on a dot-grid paper ground; pan/zoom, drag-to-move, and Select/Add/
+  Connect/Delete gesture tools, including sub-model drill-in with a breadcrumb trail.
+- **Inspector** — Selection/Parameters/Settings tabs with inline expression validation and
+  live `check()` findings (a tab-strip badge plus per-field and whole-model messages).
+  Flexible panels (yaml/canvas/inspector) resize, maximize, and minimize, with layout
+  persisted across reloads.
+- **Files** — versioned local-storage model registry (up to 20 versions per model), autosave
+  every second with restore-on-reload, an Examples menu (the two models below), and
+  YAML Import/Export.
+- Light/dark theme follows the OS preference (or an explicit `data-theme` override).
+
+Run `npm test` for the full suite (phase 1's compute core + phase 2's editor, both DOM-free
+logic and pure-function coverage for the DOM-heavy modules).
 
 ## Run locally
 
