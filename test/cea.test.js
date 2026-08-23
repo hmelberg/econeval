@@ -26,3 +26,22 @@ test('no wtp -> nmb omitted', () => {
   const { rows } = cea({ A: { cost: 0, qaly: 0 }, B: { cost: 10, qaly: 1 } }, {});
   assert.equal(rows[1].nmb, undefined);
 });
+
+test('exact-duplicate strategies: icer is null, never NaN', () => {
+  const { rows } = cea({
+    A: { cost: 0, qaly: 0 },
+    B1: { cost: 1000, qaly: 0.5 },
+    B2: { cost: 1000, qaly: 0.5 },
+    C: { cost: 2000, qaly: 0.8 },
+  }, {});
+  const by = Object.fromEntries(rows.map(r => [r.strategy, r]));
+
+  for (const r of rows) {
+    if (r.icer !== null) assert.equal(Number.isNaN(r.icer), false, `${r.strategy}.icer is NaN`);
+  }
+  assert.equal(by.B2.icer, null);
+  assert.notEqual(by.B1.status, 'dominated');
+  assert.notEqual(by.B2.status, 'dominated');
+  assert.equal(typeof by.C.icer, 'number');
+  assert.equal(Number.isFinite(by.C.icer), true);
+});

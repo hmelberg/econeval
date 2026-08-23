@@ -22,7 +22,17 @@
  * extended-dominated rows get `dcost`/`dqaly`/`icer: null` — they are not frontier points.
  * `nmb = wtp*qaly - cost` is computed for every row (not just frontier ones) when `wtp` is
  * given; omitted entirely otherwise.
+ *
+ * `icer` is `null` whenever `dqaly === 0` (never `NaN`/`Infinity`) — among survivors this can
+ * only happen for an exact cost+qaly duplicate (anything with equal qaly and higher cost is
+ * strictly dominated before reaching the ICER stage), and `null` already means "no meaningful
+ * increment" everywhere else in this module. Controller ruling 2026-08-23.
  */
+function icerOf(cur, prev) {
+  const dqaly = cur.qaly - prev.qaly;
+  return dqaly === 0 ? null : (cur.cost - prev.cost) / dqaly;
+}
+
 export function cea(results, { wtp } = {}) {
   const rows = Object.entries(results).map(([strategy, r]) => ({
     strategy, cost: r.cost, qaly: r.qaly, status: '',
@@ -42,10 +52,10 @@ export function cea(results, { wtp } = {}) {
   // pair and recompute until the sequence is clean.
   let survivors = rows.filter((s) => s.status === '');
   for (;;) {
-    const icers = survivors.map((s, i) => (i === 0 ? null :
-      (s.cost - survivors[i - 1].cost) / (s.qaly - survivors[i - 1].qaly)));
+    const icers = survivors.map((s, i) => (i === 0 ? null : icerOf(s, survivors[i - 1])));
     let violation = -1;
     for (let i = 1; i < icers.length - 1; i++) {
+      if (icers[i] === null || icers[i + 1] === null) continue; // no meaningful comparison
       if (icers[i] > icers[i + 1]) { violation = i; break; }
     }
     if (violation === -1) break;
@@ -61,7 +71,7 @@ export function cea(results, { wtp } = {}) {
     } else {
       s.dcost = s.cost - prev.cost;
       s.dqaly = s.qaly - prev.qaly;
-      s.icer = s.dcost / s.dqaly;
+      s.icer = icerOf(s, prev);
     }
     if (survivorSet.has(s)) prev = s;
   }
