@@ -920,6 +920,86 @@ button:active {
   height: 260px;
 }
 
+/* ---------- Validation tab (Task 6) ---------- */
+
+/* Lives INSIDE the Validation .res-tab button, right after its label text — .insp-badge/
+   .insp-badge-error/.insp-badge-warn (inspector.js's own findings badge) are reused directly for
+   the counts themselves ("same style as the inspector badge"); this wrapper only adds spacing. */
+.res-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-left: var(--sp-1);
+}
+
+.res-validation {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.res-validation-group h3 {
+  margin: 0 0 var(--sp-1);
+  font-size: var(--fs-1);
+  font-weight: 400;
+  color: var(--muted);
+}
+.res-validation-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+/* A findings row: level chip + code + message. Both the plain <div> (unresolvable path) and the
+   clickable <button> (resolves to a state/node) variants share this rule — the button variant adds
+   .res-finding-clickable on top for the pointer/hover affordance only, never a different layout. */
+.res-finding-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  width: 100%;
+  text-align: left;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: var(--fs-1);
+  color: var(--ink);
+}
+.res-finding-clickable {
+  cursor: pointer;
+}
+.res-finding-clickable:hover {
+  border-color: var(--accent);
+}
+/* Status colors ARE correct here — these chips report a genuine check() finding, not a normal
+   editing state (unlike .res-stale, deliberately muted just above). */
+.res-finding-chip {
+  flex: 0 0 auto;
+  font-size: var(--fs-0);
+  padding: 1px var(--sp-1);
+  border-radius: var(--radius-sm);
+  color: #fff;
+  white-space: nowrap;
+}
+.res-finding-danger {
+  background: var(--danger);
+}
+.res-finding-warn {
+  background: var(--warn);
+}
+.res-finding-code {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: var(--fs-0);
+}
+.res-finding-msg {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 /* ---------- Dialogs ---------- */
 
 dialog {

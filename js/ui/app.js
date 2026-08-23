@@ -223,16 +223,22 @@ const canvas = createCanvas(document.getElementById('canvas'), store, {
   flush: sync.flush,
 });
 
-createInspector(document.getElementById('inspector-body'), document.getElementById('inspector-tabs'), store, {
+const inspector = createInspector(document.getElementById('inspector-body'), document.getElementById('inspector-tabs'), store, {
   flush: sync.flush,
 });
 
-// selectOnCanvas is a stub for now (Validation tab has no click-through rows yet — Task 6 wires the
-// real inspector-focus behavior); still routes through store.select so it's never a true no-op.
+// selectOnCanvas: the Validation tab's click-through target (js/ui/results.js). Selects the entity
+// (store.select — the same call every canvas gesture/inspector picker already makes), then
+// switches the inspector to its Selection tab via the EXACT function its own tab button's click
+// handler calls (inspector.setActiveTab — saveLayout's read-merge-write persist + a render(), both
+// already implemented there; nothing duplicated here).
 const results = createResults(document.getElementById('pane-results'), store, {
   flush: sync.flush,
   plotly: window.Plotly,
-  selectOnCanvas: (sel) => store.select(sel),
+  selectOnCanvas: (sel) => {
+    store.select(sel);
+    inspector.setActiveTab('selection');
+  },
 });
 
 // ================================================================================================
@@ -573,4 +579,4 @@ window.addEventListener('beforeunload', (e) => {
 
 // Exposed only for the manual/e2e verification pass (never imported by any module) — lets a
 // browser console poke at live state without re-deriving it from the DOM.
-window.__econeval = { store, sync, canvas, reg, panels, results };
+window.__econeval = { store, sync, canvas, inspector, reg, panels, results };

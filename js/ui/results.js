@@ -1,5 +1,21 @@
-// Results drawer: CEA + Trace + Tornado + PSA tabs (Validation content lands Task 6 — it is wired
-// here only as an empty-state placeholder so the tab strip is complete now).
+// Results drawer: CEA + Trace + Tornado + PSA + Validation tabs.
+//
+// Validation (Task 6): re-runs check(store.get().model) FRESH on every tab open/render — never a
+// cached copy of gate()'s errors-only filter and never the inspector's own debounced findings — so
+// the list is always current the instant the tab is opened, warnings included. Findings are grouped Errors
+// then Warnings, each with a count heading; a finding whose `path` resolves against the real model
+// (see js/ui/validation-path.js's resolveFindingPath — a markov state via `states.X`/
+// `transitions.X…`, or a tree node via `tree…`, best-effort through a `models.<name>…` sub-model
+// chain) renders as a <button> that calls `selectOnCanvas({kind, id, modelPath})`; everything else
+// (params/settings findings, or a path this resolver can't place) renders as a plain row. Empty
+// state: "No findings — the model is clean." The Validation tab BUTTON in the tab strip also
+// carries its own error/warning-count badge (same `.insp-badge`/`.insp-badge-error`/
+// `.insp-badge-warn` classes the inspector's own badge uses — "same style", not a reimplementation
+// of the look), kept current by a SEPARATE 300ms-debounced check() on every store.subscribe
+// notification — deliberately not sharing the inspector's own debounced copy (module contract:
+// results.js stays self-contained, per the task brief), and deliberately not reusing the
+// per-render fresh check() above either (the badge must stay live even while some OTHER tab is
+// active and Validation's own render function never runs).
 //
 // Tornado (Task 5): pure function of the LIVE current model (store.get().model), never a frozen
 // snapshot — it has no "stale" state of its own (unlike CEA/Trace/PSA, which all read from a
@@ -36,14 +52,15 @@
 //           only two ids index.html pre-declares; everything else under them is built here).
 //   flush:  () => void, called before reading the model — mirrors canvas.js/inspector.js's own
 //           `flush` param: a Run must never race a pending debounced YAML-pane edit.
-//   plotly: injected `window.Plotly` (task-1) — only the Trace tab uses it in this task.
-//   selectOnCanvas: (sel) => void, provided by app.js for the Validation tab's future click-
-//           through (store.select + inspector focus) — accepted per the module contract but
-//           UNUSED in this task (Validation has no real rows yet, only an error count).
+//   plotly: injected `window.Plotly` (task-1) — the Trace/Tornado/PSA charts use it.
+//   selectOnCanvas: (sel) => void, provided by app.js for the Validation tab's click-through rows
+//           — app.js's implementation does store.select(sel) + switches the inspector to its
+//           Selection tab + re-renders it (see app.js's own selectOnCanvas comment for exactly
+//           which existing helpers it reuses).
 //
 // Run flow (public `runBase()`, the method app.js's #btn-run/Ctrl-Enter handler calls):
 //   flush() -> store.get().parseError set? -> toast "Fix the YAML error before running.", stop
-//   (lastRun untouched) -> gate(model): errors -> lastGateErrors set, Validation tab, toast, stop
+//   (lastRun untouched) -> gate(model): errors -> Validation tab, toast, stop
 //   (previous results, if any, are left exactly as they were — see "staleness" below); ok ->
 //   runBase() (analyses.js) -> lastRun captured, CEA tab. Opening the drawer itself (toggle-results
 //   via panels.js if closed) and the Run button's busy/disabled state are app.js's job, NOT this
@@ -114,15 +131,16 @@
 // `console.debug`, not a user-facing toast/error) and keeps the "expected race" story honest
 // without reintroducing the original unhandled-rejection console error.
 //
-// Extending the tab registry (T6 — Validation is still the one placeholder left): `TABS` (id +
-// label, tab STRIP only) and `TAB_RENDERERS` (id -> () => void, called with bodyEl already
-// cleared) are the two lists to touch. Add a tab, or replace the validation placeholder entry with
-// real content: `openTab`/`renderTabStrip`/`renderBody` need no changes for a same-shape addition.
-// `renderTabStrip`'s per-button `hidden` rule is Trace-specific (markov-only) — a future
-// conditionally-hidden tab would add its own branch there the same way.
+// Extending the tab registry: `TABS` (id + label, tab STRIP only) and `TAB_RENDERERS` (id -> () =>
+// void, called with bodyEl already cleared) are the two lists to touch — a future same-shape
+// addition needs no changes to `openTab`/`renderTabStrip`/`renderBody`. `renderTabStrip`'s
+// per-button `hidden` rule is Trace-specific (markov-only) — a future conditionally-hidden tab
+// would add its own branch there the same way.
 
 import { gate, runBase, traceFor, availability, runTornado, runPsa, psaDerived } from './analyses.js';
 import { cea } from '../analysis/cea.js';
+import { check } from '../analysis/check.js';
+import { resolveFindingPath } from './validation-path.js';
 import {
   readChartTheme, buildTraceSpec, buildTornadoSpec, buildCEPlaneSpec, buildCEACSpec, buildEVPISpec,
 } from './charts.js';
@@ -165,13 +183,7 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
   const tabsEl = paneEl.querySelector('#results-tabs');
   const bodyEl = paneEl.querySelector('#results-body');
 
-  // `selectOnCanvas` is stored but unused this task — Task 6 wires the Validation tab's
-  // click-through to it. Referencing it in a no-op keeps `eslint no-unused-vars`-style tools quiet
-  // without pretending it's already load-bearing.
-  void selectOnCanvas;
-
   let lastRun = null;          // {results, ceaRows, strategies, strategyIndex, wtp, text, ts}
-  let lastGateErrors = null;   // Finding[] | null — from the most recent FAILED gate() call
   let lastPsa = null;          // {psaResult, text, ts, elapsedMs, n, seed} | null — see module doc
   let activeTab = 'cea';
   let selectedTraceStrategy = null;
@@ -181,6 +193,15 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
   let activeChartRenderer = null; // () => void, re-invoked on a theme change; see module doc above
   let toastTimer = null;
   const chartRegistry = new Set(); // live chart-bearing DOM elements; see purgeCharts()/module doc
+
+  // Validation tab-strip badge (Task 6): a SEPARATE, self-contained 300ms-debounced check() —
+  // deliberately not the inspector's own debounced copy, and deliberately not the per-render fresh
+  // check() renderValidationTab() runs on every open (that one must stay instantaneous and current
+  // the moment the tab opens; this one only needs to be "current within ~300ms" and must keep
+  // updating even while some OTHER tab is active, since the Validation tab's own render function
+  // never runs in that case). See module doc + updateValidationBadge()/scheduleValidationBadge().
+  let validationFindings = [];
+  let validationBadgeTimer = null;
 
   // Mirrors analyses.js's own PRIVATE strategyNamesOf(model) exactly (markov -> Object.keys
   // (model.strategies); tree -> its root's children names, NOT model.strategies — see that
@@ -198,6 +219,20 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
     return store.get().model?.type === 'markov';
   }
 
+  // Mirrors inspector.js's own exported countByLevel(findings) exactly — duplicated locally
+  // (rather than imported from inspector.js) for the same reason strategyNamesOf above is: keeps
+  // this module's dependency surface to analysis/ + its own charts/results-format/validation-path
+  // siblings, never a DOM module.
+  function countFindingLevels(findings) {
+    let errors = 0;
+    let warnings = 0;
+    for (const f of findings) {
+      if (f.level === 'error') errors += 1;
+      else if (f.level === 'warning') warnings += 1;
+    }
+    return { errors, warnings };
+  }
+
   function readTheme() {
     return readChartTheme((prop) => getComputedStyle(document.documentElement).getPropertyValue(prop));
   }
@@ -206,11 +241,48 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
 
   const tabButtons = new Map();
   const tabStripEl = h('div', { class: 'res-tabstrip', role: 'tablist', 'aria-label': 'Results tabs' });
+  let validationBadgeEl = null;
   for (const [id, label] of TABS) {
     const btn = h('button', { type: 'button', class: 'res-tab', role: 'tab', id: `res-tab-${id}` }, label);
     btn.addEventListener('click', () => openTab(id));
     tabButtons.set(id, btn);
     tabStripEl.appendChild(btn);
+    // The Validation tab's own error/warning-count badge lives INSIDE its tab button, right after
+    // the label — reuses the inspector's exact `.insp-badge`/`.insp-badge-error`/`.insp-badge-warn`
+    // classes ("same style as the inspector badge", per the task brief), just wrapped in a small
+    // layout-only `.res-tab-badge` span local to this module.
+    if (id === 'validation') {
+      validationBadgeEl = h('span', { class: 'res-tab-badge' });
+      btn.appendChild(validationBadgeEl);
+    }
+  }
+
+  // Updates ONLY the Validation tab button's badge contents — never a structural rebuild, so it
+  // can run on every store change (debounced, see scheduleValidationBadge) without disturbing
+  // whatever tab is currently open or stealing focus from it.
+  function updateValidationBadge() {
+    validationBadgeEl.replaceChildren();
+    const { errors, warnings } = countFindingLevels(validationFindings);
+    if (errors > 0) {
+      validationBadgeEl.appendChild(h('span', { class: 'insp-badge insp-badge-error' }, `${errors} error${errors === 1 ? '' : 's'}`));
+    }
+    if (warnings > 0) {
+      validationBadgeEl.appendChild(h('span', { class: 'insp-badge insp-badge-warn' }, `${warnings} warning${warnings === 1 ? '' : 's'}`));
+    }
+  }
+
+  // Debounced 300ms, mirroring inspector.js's own scheduleFindingsCheck() exactly (same interval,
+  // same "coalesce rapid store notifications, e.g. every keystroke of a debounced YAML edit
+  // flushing" motivation) — but a SEPARATE timer/state, per the module doc's "results.js stays
+  // self-contained" ruling.
+  function scheduleValidationBadge() {
+    if (validationBadgeTimer) clearTimeout(validationBadgeTimer);
+    validationBadgeTimer = setTimeout(() => {
+      validationBadgeTimer = null;
+      const m = store.get().model;
+      validationFindings = m ? check(m) : [];
+      updateValidationBadge();
+    }, 300);
   }
 
   function initialWtp() {
@@ -702,12 +774,59 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
     }, 0);
   }
 
-  function renderValidationTab() {
-    if (lastGateErrors && lastGateErrors.length) {
-      const n = lastGateErrors.length;
-      bodyEl.appendChild(h('p', { class: 'res-empty' }, `Model has ${n} error${n === 1 ? '' : 's'}.`));
+  // ---------- Validation tab (Task 6) ----------
+  //
+  // Deliberately calls check(model) FRESH right here, on every render — never lastRun/lastGateErrors
+  // (frozen at the moment of the last successful/failed Run) and never the inspector's own
+  // debounced copy (a different module, a different cadence) — so a tab open always reflects the
+  // model as it stands RIGHT NOW, warnings included (gate() only ever surfaces errors). XSS: every
+  // piece of finding text (code, message, path) reaches the DOM only via the `h()` helper's
+  // textContent-node children — never innerHTML.
+
+  function buildFindingRow(f, model) {
+    const chip = h('span', {
+      class: `res-finding-chip ${f.level === 'error' ? 'res-finding-danger' : 'res-finding-warn'}`,
+    }, f.level === 'error' ? 'Error' : 'Warning');
+    const code = h('span', { class: 'res-finding-code res-font-data' }, f.code);
+    const msg = h('span', { class: 'res-finding-msg' }, f.message);
+
+    const target = resolveFindingPath(f.path, model);
+    if (target) {
+      const btn = h('button', {
+        type: 'button', class: 'res-finding-row res-finding-clickable',
+        'aria-label': `${f.level === 'error' ? 'Error' : 'Warning'} ${f.code}: ${f.message} — select on canvas`,
+      }, chip, code, msg);
+      btn.addEventListener('click', () => selectOnCanvas(target));
+      return h('li', {}, btn);
     }
-    bodyEl.appendChild(h('p', { class: 'res-empty' }, 'Validation details — content in Task 6.'));
+    return h('li', {}, h('div', { class: 'res-finding-row' }, chip, code, msg));
+  }
+
+  function buildFindingsGroup(heading, list, model) {
+    const section = h('div', { class: 'res-validation-group' });
+    section.appendChild(h('h3', {}, `${heading} (${list.length})`));
+    const ul = h('ul', { class: 'res-validation-list' });
+    for (const f of list) ul.appendChild(buildFindingRow(f, model));
+    section.appendChild(ul);
+    return section;
+  }
+
+  function renderValidationTab() {
+    const { model } = store.get();
+    const findings = model ? check(model) : [];
+
+    if (findings.length === 0) {
+      renderPlaceholder('No findings — the model is clean.');
+      return;
+    }
+
+    const errors = findings.filter((f) => f.level === 'error');
+    const warnings = findings.filter((f) => f.level === 'warning');
+
+    const wrap = h('div', { class: 'res-validation' });
+    if (errors.length) wrap.appendChild(buildFindingsGroup('Errors', errors, model));
+    if (warnings.length) wrap.appendChild(buildFindingsGroup('Warnings', warnings, model));
+    bodyEl.appendChild(wrap);
   }
 
   const TAB_RENDERERS = {
@@ -792,14 +911,12 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
 
     const g = gate(model);
     if (!g.ok) {
-      lastGateErrors = g.errors;
-      activeTab = 'validation';
+      activeTab = 'validation'; // renderValidationTab() re-runs check() itself — see module doc
       showToast(`Model has ${g.errors.length} error${g.errors.length === 1 ? '' : 's'} — fix them to run`);
       render();
       return;
     }
 
-    lastGateErrors = null;
     // Review fix (Critical): same parseWtpInput guard as commitWtp — a cleared/garbage WTP field
     // must fall back to lastGoodWtp, never silently run with wtp=0. Also normalizes the field back
     // to whatever value actually took effect, same as commitWtp.
@@ -818,6 +935,7 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
   store.subscribe(() => {
     renderStaleBanner();
     renderTabStrip();
+    scheduleValidationBadge();
     if (activeTab === 'trace' && !isMarkovNow()) {
       activeTab = 'cea';
       renderTabStrip();
@@ -831,6 +949,13 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
   darkMq.addEventListener('change', () => activeChartRenderer?.());
   const themeObserver = new MutationObserver(() => activeChartRenderer?.());
   themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+  // Initial badge computation is synchronous (mirrors inspector.js's own boot-time `check()` call)
+  // — the very first render must show a correct badge immediately, not an empty one for the first
+  // 300ms until the debounced path first fires.
+  const bootModel = store.get().model;
+  validationFindings = bootModel ? check(bootModel) : [];
+  updateValidationBadge();
 
   render();
 

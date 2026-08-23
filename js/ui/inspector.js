@@ -939,5 +939,9 @@ export function createInspector(rootEl, tabsEl, store, { flush = () => {} } = {}
   latestFindings = initModel ? check(initModel) : [];
   render();
 
-  return { render };
+  // `setActiveTab` exposed for Task 6's Validation-tab click-through: app.js's own selectOnCanvas
+  // calls `store.select(sel)` then `setActiveTab('selection')` — this IS the exact function the
+  // Selection tab's own button click already runs (saveLayout's read-merge-write persist + render),
+  // so an external caller switching tabs never duplicates that logic, just reuses it.
+  return { render, setActiveTab };
 }
