@@ -148,3 +148,14 @@ test('app.css: every "outline: none" is scoped with :not(:focus-visible), never 
   }
   assert.ok(checked > 0, 'expected at least one outline: none declaration in app.css to check');
 });
+
+test('app.css: #model-name\'s idle-editable outline selector tracks contenteditable="plaintext-only"', () => {
+  // Regression: #model-name's contenteditable value moved from "true" to "plaintext-only"
+  // (Task 7, item 2 — plain-text-only paste). A selector still pinned to
+  // [contenteditable="true"] can never match again, silently dropping the dashed idle
+  // "editable" outline hint. Cheap net against the value drifting again unnoticed.
+  assert.ok(
+    appCss.includes('contenteditable="plaintext-only"'),
+    'app.css must style #model-name for contenteditable="plaintext-only", not just "true"'
+  );
+});

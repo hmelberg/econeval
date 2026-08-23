@@ -60,7 +60,7 @@ button, input, textarea, select {
   padding: var(--sp-1) var(--sp-2);
   border-radius: var(--radius-sm);
 }
-#model-name[contenteditable="true"]:not(:focus-visible) {
+#model-name:is([contenteditable="true"],[contenteditable="plaintext-only"]):not(:focus-visible) {
   outline: 1px dashed var(--line);
 }
 #model-name.dirty::after {
