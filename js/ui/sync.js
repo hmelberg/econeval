@@ -29,8 +29,18 @@ export function createSync(store, {
       clearTimer(timerHandle);
       timerHandle = null;
     }
+    // Set lastSyncedText to the text we're about to commit BEFORE calling store.setText, not
+    // after. store.setText() calls the store's subscribers synchronously (notify() runs inside
+    // it, before the call returns), so a subscriber that reads textForView() from inside its own
+    // listener would otherwise see the store's new text compared against the STALE
+    // lastSyncedText (still the pre-commit value) and misreport this as a model-originated
+    // change — a false dirtyFromModel: true for our own commit, which in the real textarea
+    // binding means an unwanted .value reassignment (cursor jump) on every debounce fire.
+    // store.setText(text), on both the good- and bad-parse paths, always sets store.get().text to
+    // exactly `text`, so recording it here first is equivalent to reading it back after, but
+    // without the synchronous-notification race.
+    lastSyncedText = text;
     store.setText(text);
-    lastSyncedText = store.get().text;
   }
 
   return {

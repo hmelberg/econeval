@@ -167,6 +167,53 @@ test('dispose cancels any pending timer and stops further commits', () => {
   assert.equal(store.get().text, GOOD, 'the pending edit was discarded, not committed, by dispose');
 });
 
+// --- Regression: a synchronous subscriber must not see sync's own commit misreported as a
+// model-originated change (task review finding). store.setText() calls subscribers synchronously
+// (notify() runs inside it, before the call returns), so anything that updates lastSyncedText
+// only AFTER calling store.setText() would let a listener observe the store's new text compared
+// against the stale, pre-commit lastSyncedText — a false dirtyFromModel: true on every debounce
+// fire, which in the real textarea binding means an unwanted .value reassignment (cursor jump)
+// while the user is mid-typing.
+
+test("regression: sync's own debounce-fire commit is not misreported as model-originated to a synchronous subscriber", () => {
+  const store = createStore(GOOD);
+  const timers = createFakeTimers();
+  const sync = createSync(store, { setTimer: timers.setTimer, clearTimer: timers.clearTimer });
+
+  const edited = GOOD.replace('name: m', 'name: edited');
+  sync.onUserInput(edited);
+
+  let observed = null;
+  const unsubscribe = store.subscribe(() => {
+    observed = sync.textForView(); // read synchronously, from inside the notification
+  });
+
+  timers.fireAll(); // fires the debounce -> commitPending -> store.setText -> notify(), synchronously
+  unsubscribe();
+
+  assert.ok(observed, 'the subscriber should have been notified by the commit');
+  assert.equal(observed.dirtyFromModel, false, "sync's own commit must not be flagged as model-originated");
+  assert.equal(observed.text, edited);
+});
+
+test('regression: an applyOp change (no pending input) IS reported as model-originated to a synchronous subscriber', () => {
+  const store = createStore(GOOD);
+  const timers = createFakeTimers();
+  const sync = createSync(store, { setTimer: timers.setTimer, clearTimer: timers.clearTimer });
+
+  let observed = null;
+  const unsubscribe = store.subscribe(() => {
+    observed = sync.textForView(); // read synchronously, from inside the notification
+  });
+
+  store.applyOp((m) => ops.addState(m));
+  unsubscribe();
+
+  assert.ok(observed, 'the subscriber should have been notified by the applyOp');
+  assert.equal(observed.dirtyFromModel, true, 'a genuine model-originated change must still be flagged');
+  assert.equal(observed.text, store.get().text);
+});
+
 test('createSync works with real timers and default injected functions when none are passed', async () => {
   const store = createStore(GOOD);
   const sync = createSync(store, { debounceMs: 5 });
