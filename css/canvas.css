@@ -1,5 +1,8 @@
-/* econeval canvas — ground + dot grid only. Node/edge styles land with Task 9.
-   The canvas is a publication figure: warm paper surface with a faint dot grid. */
+/* econeval canvas — ground + dot grid, plus node/edge/selection styling (Task 9).
+   The canvas is a publication figure: warm paper surface with a faint dot grid, nodes as 1.5px
+   ink strokes with paper fill, edge labels in the mono data face like typeset annotations. Chrome
+   stays quiet so the figure is the hero — the only color besides ink/muted is --accent, reserved
+   for the selection halo (never a fill change, per the design tokens doc). */
 
 #canvas {
   display: block;
@@ -10,4 +13,93 @@
   background-color: var(--paper);
   background-image: radial-gradient(var(--dot) 1px, transparent 1px);
   background-size: 12px 12px;
+  cursor: grab;
+}
+#canvas:active {
+  cursor: grabbing;
+}
+
+/* ---------- Nodes ---------- */
+
+#canvas .node {
+  cursor: pointer;
+}
+#canvas .node[data-kind="submodel"] {
+  cursor: zoom-in; /* hints the double-click-to-enter gesture */
+}
+
+#canvas .node-shape,
+#canvas .node-shape-inner {
+  fill: var(--paper);
+  stroke: var(--ink);
+  stroke-width: 1.5;
+}
+#canvas .node-shape-inner {
+  fill: none; /* the stadium's inner stroke only draws an outline, giving the "double stroke" look */
+}
+#canvas .terminal-bar {
+  stroke: var(--ink);
+  stroke-width: 1.5;
+}
+
+#canvas .node-name {
+  font-family: var(--font-ui);
+  font-size: var(--fs-1);
+  fill: var(--ink);
+}
+/* Payoff summary (cost/utility) as a muted second line under a tree node's name — numbers, so the
+   mono data face applies (same rule as edge labels/params table/YAML pane). */
+#canvas .node-payoff {
+  font-family: var(--font-data);
+  font-size: var(--fs-0);
+  fill: var(--muted);
+}
+
+/* Selection halo: an outer 3px accent stroke, never a fill change. Drawn behind the node's own
+   shape (appended first in the group) so only the outer ring reads as a halo. */
+#canvas .halo {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
+/* ---------- Edges ---------- */
+
+#canvas .edge-line {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1.5;
+}
+#canvas .edge-halo {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 4.5;
+  stroke-linecap: round;
+}
+#canvas .edge-label {
+  font-family: var(--font-data);
+  font-size: var(--fs-0);
+  fill: var(--ink);
+}
+#canvas .edge {
+  cursor: pointer;
+}
+#canvas .arrowhead {
+  fill: var(--ink);
+}
+
+/* ---------- Breadcrumb (sub-model navigation) ---------- */
+
+#breadcrumb .crumb {
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  padding: 0 2px;
+}
+#breadcrumb .crumb:hover,
+#breadcrumb .crumb:focus-visible {
+  color: var(--accent);
+}
+#breadcrumb .sep {
+  margin: 0 4px;
+  color: var(--muted);
 }
