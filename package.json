@@ -1,0 +1,11 @@
+{
+  "name": "econeval",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "js-yaml": "^5.3.0"
+  }
+}
