@@ -22,12 +22,19 @@
 // inline under that field, everything else is listed under "Model findings" at the tab's bottom.
 //
 // Render discipline: a full render() rebuilds every field element, which would steal focus/cursor
-// out from under a field the user is actively editing. `committingSelf` is true only for the
-// synchronous span of a FIELD commit (change/Enter — not a button click, which has nothing to
-// lose focus-wise and should always re-render immediately); the store.subscribe handler skips the
-// full rebuild while that flag is set AND focus is currently inside rootEl, and each field
-// schedules its own reconciling render() on blur (deferred one tick, after the browser has
-// settled the blur/focus transition) so nothing goes stale for long.
+// out from under a field the user is actively editing. The store.subscribe handler
+// (shouldSkipRender) skips the full rebuild whenever focus is on a real input/select inside
+// rootEl, REGARDLESS of what triggered the store change — our own field commit, a canvas gesture
+// (e.g. clicking a different node with the Select tool while mid-typing elsewhere), a YAML-pane
+// edit, undo/redo. The one exception: on the Selection tab, if the entity the focused field
+// belongs to (captured as `renderedSelection` at the top of the last render()) is no longer
+// resolvable against the fresh model — it was deleted out from under the user, not just
+// deselected — the skip is lifted and render() proceeds immediately, since there's nothing
+// sensible left to keep showing. `committingSelf` (true only for the synchronous span of a field
+// commit, never a button click) always forces the skip on its own — most usefully for an in-place
+// rename, which can otherwise make the OLD selection.id briefly unresolvable the instant the
+// commit lands. Every field also schedules its own reconciling render() on blur (deferred one
+// tick, after the browser has settled the blur/focus transition) so nothing goes stale for long.
 
 import { compile, ExprError } from '../core/expr.js';
 import { check } from '../analysis/check.js';
@@ -139,11 +146,70 @@ export function createInspector(rootEl, tabsEl, store, { flush = () => {} } = {}
   let pendingPayoffRef = { count: 0 };
   let pendingWithRef = { count: 0 };
   let lastSelKey = null;
+  let renderedSelection = { kind: null, id: null }; // the selection the CURRENTLY DISPLAYED Selection-tab fields were built from, set at the top of every render()
 
   // ---------- op commit plumbing ----------
 
   function scopedTarget(modelPath) {
     return (modelPath ?? []).reduce((s, name) => scopedStore(s, name), store);
+  }
+
+  // Re-checks whether `sel` still resolves against the CURRENT model — the same rule store.js's
+  // private isSelectionValid applies (duplicated here in miniature since store.js doesn't export
+  // it; it's small, pure, and read-only). Used by the render-skip decision below: a selection with
+  // kind:null is trivially "resolvable" (nothing to orphan).
+  function selectionResolvable(sel) {
+    if (!sel || sel.kind == null) return true;
+    const scopeModel = scopedTarget(sel.modelPath).get().model;
+    if (!scopeModel) return false;
+    if (sel.kind === 'state') return scopeModel.type === 'markov' && scopeModel.states.some((s) => s.name === sel.id);
+    if (sel.kind === 'edge') {
+      const row = scopeModel.transitions[sel.id.from];
+      if (!row) return false;
+      return row.type === 'multinomial' ? sel.id.to in row.counts : sel.id.to in row.to;
+    }
+    if (sel.kind === 'node') {
+      if (scopeModel.type !== 'tree') return false;
+      try {
+        ops.nodeAt(scopeModel, sel.id);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    if (sel.kind === 'param') return scopeModel.params.has(sel.id);
+    return true;
+  }
+
+  function isTypingTarget(el) {
+    if (!el) return false;
+    const tag = el.tagName;
+    return tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
+  }
+
+  // Render-skip decision (controller ruling, generalized beyond "own commit only"): skip the full
+  // structural rebuild whenever the user is mid-interaction with a field inside rootEl, REGARDLESS
+  // of what triggered this store notification (our own field commit, a canvas gesture, a YAML-pane
+  // edit, undo/redo, ...) — a canvas-origin selection change must not be able to yank a field out
+  // from under someone who's mid-typing elsewhere. Two cases still force an immediate render even
+  // while typing:
+  //   - Not our own commit AND on the Selection tab AND the entity the focused field belongs to
+  //     (`renderedSelection`, captured at the top of the last render()) is no longer resolvable —
+  //     it was deleted out from under the user (Delete tool, undo, a YAML edit...), so there is
+  //     nothing sensible left to keep showing; reconcile immediately instead of leaving an orphaned
+  //     field on screen. Reselecting a DIFFERENT-but-still-existing entity (e.g. clicking another
+  //     canvas node) does NOT trigger this — the field being edited is untouched, just no longer
+  //     the active selection, so it's left alone until its own blur reconciles it.
+  //   - Focus isn't a typing target inside rootEl at all — nothing to protect.
+  // Parameters/Settings fields are never selection-entity-bound (ruling 1: always top-level), so
+  // for those two tabs a non-own-commit change is always skipped while typing — there is no
+  // "field may no longer exist" risk to check there.
+  function shouldSkipRender() {
+    const active = document.activeElement;
+    if (!isTypingTarget(active) || !rootEl.contains(active)) return false;
+    if (committingSelf) return true;
+    if (activeTab !== 'selection') return true;
+    return selectionResolvable(renderedSelection);
   }
 
   // Buttons (add/remove/delete row): no focus to protect, always let the store's own subscribe
@@ -575,6 +641,8 @@ export function createInspector(rootEl, tabsEl, store, { flush = () => {} } = {}
       }
     });
     container.appendChild(addBtn);
+
+    renderModelFindingsSection(container);
   }
 
   // ---------- Settings tab ----------
@@ -668,6 +736,8 @@ export function createInspector(rootEl, tabsEl, store, { flush = () => {} } = {}
       registerField('settings.start', err);
       container.appendChild(row);
     }
+
+    renderModelFindingsSection(container);
   }
 
   // ---------- findings: badge + inline + "Model findings" ----------
@@ -766,6 +836,7 @@ export function createInspector(rootEl, tabsEl, store, { flush = () => {} } = {}
 
   function render() {
     const state = store.get();
+    renderedSelection = state.selection ?? { kind: null, id: null };
 
     const selKey = JSON.stringify(state.selection ?? null);
     if (selKey !== lastSelKey) {
@@ -800,7 +871,7 @@ export function createInspector(rootEl, tabsEl, store, { flush = () => {} } = {}
 
   function onStoreChange() {
     scheduleFindingsCheck();
-    if (committingSelf && rootEl.contains(document.activeElement)) return;
+    if (shouldSkipRender()) return;
     render();
   }
   store.subscribe(onStoreChange);
