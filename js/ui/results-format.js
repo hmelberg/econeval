@@ -6,10 +6,15 @@
 const MONEY_FMT = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 
 // 0-decimal, thousands-separated — the CEA table's cost/ΔCost/ICER/NMB columns. Negative values
-// keep Intl's default leading '-' sign, never accounting-style parentheses.
+// keep Intl's default leading '-' sign, never accounting-style parentheses. Triage fix (c): a
+// small negative value that ROUNDS to zero (e.g. -0.4) formats as the literal string "-0" —
+// technically correct per IEEE-754/Intl, but reads as a bug ("negative zero dollars") in a money
+// column; normalized to "0" here, the one string this formatter otherwise never produces on its
+// own (real negative results always round to a nonzero magnitude, or they wouldn't be negative).
 export function formatMoney(n) {
   if (n === null || n === undefined || !Number.isFinite(n)) return '';
-  return MONEY_FMT.format(n);
+  const s = MONEY_FMT.format(n);
+  return s === '-0' ? '0' : s;
 }
 
 // 4-decimal fixed — the CEA table's QALY/ΔQALY columns, and the Trace tab's "Show data" occupancy
@@ -59,11 +64,15 @@ export function buildStrategyIndex(strategies) {
 // user — `'0'` is NOT empty). Callers (results.js's commitWtp/runNow) are expected to also write
 // the returned value back into the input, so a rejected edit visibly reverts rather than leaving
 // stale/incorrect text sitting in the field next to a silently-different in-memory wtp.
+// Triage fix (d): a negative WTP is never a legal willingness-to-pay (NMB trades QALYs against
+// cost at a non-negative rate), so it is rejected the same way empty/non-numeric text is —
+// falling back to `lastGood` rather than silently accepting e.g. "-5000" and inverting the CEA
+// frontier's NMB ranking.
 export function parseWtpInput(raw, lastGood) {
   const trimmed = String(raw ?? '').trim();
   if (trimmed === '') return lastGood;
   const n = Number(trimmed);
-  return Number.isFinite(n) ? n : lastGood;
+  return (Number.isFinite(n) && n >= 0) ? n : lastGood;
 }
 
 // Task 5 (Tornado + PSA tabs): wtpMax fed into analyses.js's psaDerived() for the PSA tab's

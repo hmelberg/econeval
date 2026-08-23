@@ -126,6 +126,13 @@ test('app.css: #workspace grid-template-columns line matches the binding chrome 
   );
 });
 
+test('app.css: #workspace grid-template-rows line matches the binding chrome spec', () => {
+  assert.ok(
+    appCss.includes('grid-template-rows: minmax(0,1fr) 4px var(--h-results, 0px);'),
+    'app.css must contain the exact grid-template-rows declaration from the plan'
+  );
+});
+
 test('app.css: every "outline: none" is scoped with :not(:focus-visible), never an unconditional override', () => {
   // Regression: an unconditional `outline: none` on a selector with ID (or other
   // higher) specificity permanently beats the global `:focus-visible` ring rule,

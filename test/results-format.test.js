@@ -17,6 +17,11 @@ test('formatMoney: negative values keep a leading minus, never parentheses', () 
   assert.equal(formatMoney(-1234.6), '-1,235');
 });
 
+test('formatMoney: negative zero (a negative value rounding to 0) normalizes to "0", never "-0"', () => {
+  assert.equal(formatMoney(-0.4), '0');
+  assert.equal(formatMoney(-0), '0');
+});
+
 test('formatMoney: null/undefined/non-finite -> empty string', () => {
   assert.equal(formatMoney(null), '');
   assert.equal(formatMoney(undefined), '');
@@ -96,6 +101,11 @@ test('parseWtpInput: "0" is a real, explicit value -> 0, not lastGood', () => {
 
 test('parseWtpInput: a valid number string -> that number', () => {
   assert.equal(parseWtpInput('25000', 30000), 25000);
+});
+
+test('parseWtpInput: a negative number -> lastGood (WTP can never be negative)', () => {
+  assert.equal(parseWtpInput('-5000', 30000), 30000);
+  assert.equal(parseWtpInput('-1', 30000), 30000);
 });
 
 // --- computeWtpMax ---

@@ -297,6 +297,14 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
   // instead would forget that first edit and revert all the way to the model's default.
   let lastGoodWtp = initialWtp();
 
+  // Item 3 (final-review): the model's OWN declared `settings.wtp` at the last store notification
+  // this module observed — tracked so the store.subscribe handler below can tell "the model's
+  // stated WTP itself changed" (New/Open/Examples/Import loading a different document, or an
+  // inspector edit to settings.wtp) apart from "any other, unrelated model edit" (a payoff tweak,
+  // a param change, ...). Only the former should reseed the input; an ordinary edit that leaves
+  // settings.wtp untouched must never clobber a value the user already typed.
+  let lastSeenSettingsWtp = store.get().model?.settings?.wtp;
+
   const wtpInput = h('input', {
     type: 'number', class: 'res-font-data res-wtp-input', min: '0', step: '1000',
     'aria-label': 'Willingness to pay', value: String(initialWtp()),
@@ -933,6 +941,17 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
   // ---------- store subscription: staleness + trace-tab availability only (see module doc) ----------
 
   store.subscribe(() => {
+    // Item 3 (final-review): reseed the WTP input when the model's OWN settings.wtp value changes
+    // — including from/to undefined (a model with no declared wtp swapped for one that has one, or
+    // vice versa) — never merely because the model changed at all. Comparing against the tracked
+    // `lastSeenSettingsWtp` (rather than e.g. `lastGoodWtp`) is what keeps a user-typed override
+    // alive across ordinary edits: those leave settings.wtp untouched, so this never fires for them.
+    const currentSettingsWtp = store.get().model?.settings?.wtp;
+    if (currentSettingsWtp !== lastSeenSettingsWtp) {
+      lastSeenSettingsWtp = currentSettingsWtp;
+      lastGoodWtp = currentSettingsWtp ?? 30000;
+      wtpInput.value = String(lastGoodWtp);
+    }
     renderStaleBanner();
     renderTabStrip();
     scheduleValidationBadge();

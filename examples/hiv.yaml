@@ -30,6 +30,8 @@ params:
   # (0.202 etc.) equals the beta mean by construction.
   p_AB:
     value: 0.202
+    low: 0.15
+    high: 0.25
     dist: beta(202, 798)
     source: Chancellor 1997
   p_AC:

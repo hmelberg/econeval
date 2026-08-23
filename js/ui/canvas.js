@@ -272,6 +272,20 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
     return arraysEqual(a ?? [], b ?? []);
   }
 
+  // Item 4 (final-review, Validation click-through): jumps the canvas straight to the scope a
+  // finding's modelPath names — the same currentModelPath + render() the breadcrumb pop-to and the
+  // double-click sub-model drill-in (handleNodeDoubleClick, below) already use, just settable to an
+  // arbitrary depth in one call instead of one level at a time. app.js's selectOnCanvas calls this
+  // BEFORE store.select(sel), so the halo-matching sameModelPath check above sees the right scope
+  // by the time the resulting store notification re-renders.
+  function openScope(modelPath) {
+    const path = modelPath ?? [];
+    if (sameModelPath(currentModelPath, path)) return;
+    currentModelPath.length = 0;
+    currentModelPath.push(...path);
+    render();
+  }
+
   // -------- toast strip (transient op-error messages; "errors surfaced, never swallowed") --------
 
   function showToast(message) {
@@ -992,5 +1006,6 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
     render,
     setTool,
     currentModelPath,
+    openScope,
   };
 }

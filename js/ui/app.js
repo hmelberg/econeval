@@ -240,6 +240,10 @@ const results = createResults(document.getElementById('pane-results'), store, {
   flush: sync.flush,
   plotly: window.Plotly,
   selectOnCanvas: (sel) => {
+    // Item 4 (final-review, ruling): open the sub-model's scope on canvas FIRST — canvas.openScope
+    // sets currentModelPath and re-renders, so the halo-matching check inside canvas.js's own
+    // render sees the right scope by the time store.select's notification arrives just below.
+    canvas.openScope(sel.modelPath ?? []);
     store.select(sel);
     inspector.setActiveTab('selection');
   },
@@ -261,6 +265,19 @@ const btnRun = document.getElementById('btn-run');
 
 function runModel() {
   if (!panels.getState().results.open) panels.dispatch({ type: 'toggle-results' });
+  // Item 2 (final-review): a maximized OTHER pane, or a minimized results drawer, would otherwise
+  // let the run compute invisibly — the drawer opens above per the toggle-results call just above,
+  // but a maximized yaml/canvas/inspector pane still covers it, and a minimized drawer still shows
+  // only its 28px strip. Un-maximize whatever isn't already 'results' (maximizing results itself is
+  // exactly the visible state we want, so leave that alone), then un-minimize the drawer if needed
+  // — 'minimize' toggles, so dispatching it again is the reducer's own un-minimize path.
+  const layoutState = panels.getState();
+  if (layoutState.maximized && layoutState.maximized !== 'results') {
+    panels.dispatch({ type: 'restore' });
+  }
+  if (panels.getState().results.min) {
+    panels.dispatch({ type: 'minimize', pane: 'results' });
+  }
   btnRun.disabled = true;
   btnRun.setAttribute('aria-busy', 'true');
   setTimeout(() => {
@@ -542,7 +559,12 @@ document.getElementById('btn-export').addEventListener('click', () => {
 // Undo/redo only when focus is NOT in a text field (brief, verbatim) — a native textarea/input has
 // its own undo stack that must keep working normally; the app's document-level undo only engages
 // when focus is elsewhere (canvas, topbar, etc.). Ctrl/Cmd+S has no such carve-out: it must always
-// override the browser's native "Save page" behavior, everywhere, including while typing.
+// override the browser's native "Save page" behavior, everywhere, including while typing. Item 5
+// (final-review ruling): Ctrl/Cmd+Enter is the same — runModel() -> results.runBase() calls
+// flush() first (via runNow), so a pending debounced YAML edit is always synced before the run
+// reads the model; there's no staleness hazard the typing-target guard was protecting against, and
+// a user mid-edit in the YAML pane wanting to run immediately is exactly the common case. The Z/Y
+// undo/redo guard below is intentionally left untouched.
 
 window.addEventListener('keydown', (e) => {
   const mod = e.metaKey || e.ctrlKey;
@@ -556,7 +578,6 @@ window.addEventListener('keydown', (e) => {
   }
 
   if (key === 'enter') {
-    if (isTypingTarget(document.activeElement)) return; // brief: guarded, not while typing
     e.preventDefault();
     runModel();
     return;

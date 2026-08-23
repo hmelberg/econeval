@@ -9,19 +9,28 @@ import {
 
 const load = (f) => parseModel(readFileSync(new URL(`../examples/${f}`, import.meta.url), 'utf8'));
 
-test('hiv availability: tornado ok with p_AB listed (after low/high added), psa ok, trace true', () => {
+test('hiv availability: tornado ok with p_AB listed, psa ok, trace true', () => {
   const m = load('hiv.yaml');
-  // hiv.yaml has no low/high on any param out of the box — add it to p_AB only, mirroring how
-  // check.test.js hand-augments the same fixture, so tornado.params ends up exactly ['p_AB'].
-  m.params.get('p_AB').low = 0.15;
-  m.params.get('p_AB').high = 0.25;
-
+  // hiv.yaml ships with low/high declared on p_AB only (no other param carries both), so
+  // tornado.params comes out of availability() as exactly ['p_AB'] straight from the parsed
+  // fixture — no hand-augmentation needed here.
   const a = availability(m);
   assert.equal(a.tornado.ok, true);
   assert.deepEqual(a.tornado.params, ['p_AB']);
   assert.equal(a.tornado.reason, undefined);
   assert.equal(a.psa.ok, true);       // every p_ param carries a dist: in hiv.yaml
   assert.equal(a.trace, true);        // markov
+});
+
+test('availability: a param with only `low` (no `high`) is excluded from tornado.params', () => {
+  const m = load('hiv.yaml');
+  // p_AC has neither low nor high out of the box; give it `low` only — tornado requires BOTH
+  // low and high, so this must NOT add p_AC to tornado.params alongside p_AB.
+  m.params.get('p_AC').low = 0.05;
+
+  const a = availability(m);
+  assert.equal(a.tornado.ok, true);
+  assert.deepEqual(a.tornado.params, ['p_AB']);
 });
 
 test('availability: not-ok cases carry a reason', () => {
