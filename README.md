@@ -121,7 +121,9 @@ tree:
   dominance, ICER, net monetary benefit at a willingness-to-pay threshold.
 - **DSA** — one-way sensitivity (tornado on incremental NMB) and two-way grids.
 - **PSA** — seeded probabilistic sampling over every `dist`-bearing param, with optional
-  Gaussian-copula correlations between params.
+  Gaussian-copula correlations between params. v1 semantics: global params draw once per
+  iteration and are shared everywhere; a sub-model's own dist-bearing params draw
+  independently per attachment (route through a global param via `with:` to share them).
 - **CEAC** — cost-effectiveness acceptability curves derived from the PSA sample.
 - **EVPI** — expected value of perfect information, also derived from the PSA sample.
 

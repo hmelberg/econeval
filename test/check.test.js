@@ -162,6 +162,41 @@ transitions:
   assert.match(f.message, /settings\.age/);
 });
 
+test('E_EXPR — unknown function call', () => {
+  const m = parseModel(`
+econeval: 1
+type: markov
+name: x
+settings: {cycles: 1, start: a}
+states:
+  a:
+    utility: 1
+    cost: bta(1, 2)
+transitions:
+  a: {a: 1}
+`);
+  const findings = check(m);
+  assert.ok(findings.some((f) => f.code === 'E_EXPR' && f.level === 'error'));
+});
+
+test('E_EXPR — distribution call with wrong arity', () => {
+  const m = parseModel(`
+econeval: 1
+type: markov
+name: x
+settings: {cycles: 1, start: a}
+params:
+  p:
+    dist: beta(5)
+states:
+  a: {utility: 1, cost: p}
+transitions:
+  a: {a: 1}
+`);
+  const findings = check(m);
+  assert.ok(findings.some((f) => f.code === 'E_EXPR' && f.level === 'error'));
+});
+
 test('E_PARAM_CYCLE — two params reference each other', () => {
   const m = parseModel(`
 econeval: 1

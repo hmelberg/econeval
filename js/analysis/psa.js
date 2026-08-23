@@ -143,7 +143,17 @@ export function psa(model, opts = {}) {
   const meanEnv = makeEnv(model, { mode: 'mean' });
   const distOf = new Map(distParamNames.map((name) => [name, parseDistCall(model.params.get(name).dist, meanEnv)]));
 
-  const strategies = Object.keys(model.strategies);
+  // Strategy names are NOT read off model.strategies: that registry holds the (possibly implicit
+  // {base}) strategy-OVERRIDE declarations, but what run() actually returns per iteration is keyed
+  // differently for tree models — a tree's strategies are its root's CHILDREN names (see
+  // js/engine/tree.js), which have nothing to do with model.strategies (still just the implicit
+  // {base} entry for a tree with no `strategies:` block). Using model.strategies here crashed on
+  // every tree model (results[s] undefined for s='base'). Instead, derive the strategy name list
+  // from the first iteration's actual run() result, once, and reuse it for every later iteration —
+  // identical to Object.keys(model.strategies) for markov models (where the two happen to agree),
+  // and correct for tree models too. The set of strategy names is fixed per model/run regardless of
+  // iteration (run() always returns the same keys for a given model), so computing it once is safe.
+  let strategies = null;
   const samples = [];
 
   for (let iter = 0; iter < n; iter++) {
@@ -165,12 +175,13 @@ export function psa(model, opts = {}) {
     }
 
     const { strategies: results } = run(model, { mode: 'sample', rand, overrides });
+    if (strategies === null) strategies = Object.keys(results);
     const cost = {}, qaly = {};
     for (const s of strategies) { cost[s] = results[s].cost; qaly[s] = results[s].qaly; }
     samples.push({ cost, qaly });
   }
 
-  return { strategies, samples };
+  return { strategies: strategies ?? [], samples };
 }
 
 function nmbOf(sample, strategy, wtp) { return wtp * sample.qaly[strategy] - sample.cost[strategy]; }

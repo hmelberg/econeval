@@ -85,6 +85,50 @@ tree:
   close(r.strategies.Only.cost, 100 * (0.9/1.05**3 + 0.81/1.05**4 + 0.729/1.05**5));
 });
 
+test('delay on a tree sub-model attachment throws (unsupported in v1)', () => {
+  const m = parseModel(`
+econeval: 1
+type: tree
+name: treeDelay
+models:
+  acute:
+    type: tree
+    tree:
+      R:
+        Recover: {p: 0.5, utility: 1}
+        Away: {p: rest, utility: 0}
+tree:
+  Root:
+    Only:
+      Leaf: {p: 1, model: acute, delay: 2}
+`);
+  assert.throws(() => run(m, {}), (err) => {
+    assert.match(err.message, /delay on a tree sub-model attachment is not supported in v1/);
+    return true;
+  });
+});
+
+test('zero delay on a tree sub-model attachment is fine (delay: 0 is a no-op, not an error)', () => {
+  const m = parseModel(`
+econeval: 1
+type: tree
+name: treeDelayZero
+models:
+  acute:
+    type: tree
+    tree:
+      R:
+        Recover: {p: 0.5, utility: 1}
+        Away: {p: rest, utility: 0}
+tree:
+  Root:
+    Only:
+      Leaf: {p: 1, model: acute, delay: 0}
+`);
+  const r = run(m, {});
+  close(r.strategies.Only.qaly, 0.5);
+});
+
 test('with routes through parent scope', () => {
   const m = parseModel(`
 econeval: 1

@@ -119,6 +119,25 @@ transitions:
   close(r.totals.extras.visits, 2.439);
 });
 
+// Regression: a typo'd transition target (a state name not declared in `states:`) used to be
+// silently dropped — advance() would credit it once, then every later cycle only sums over the
+// declared state list, so the mass just vanishes with no error. Must fail loud instead.
+test('typo\'d transition target throws instead of silently losing mass', () => {
+  const m = parseModel(`
+econeval: 1
+type: markov
+name: typo
+settings: {cycles: 3, start: well, correction: none}
+states:
+  well: {cost: 100, utility: 0.8}
+  dead: {cost: 0, utility: 0}
+transitions:
+  well: {well: rest, daed: 0.1}
+  dead: {dead: 1}
+`);
+  assert.throws(() => runMarkov(m, makeEnv(m, {}), { discount: { cost: 0, effect: 0 } }), /daed/);
+});
+
 test('bad row sum raises with cycle context', () => {
   const m = parseModel(`
 econeval: 1

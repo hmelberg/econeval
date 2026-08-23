@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { psa, ceac, evpi, cePlane } from '../js/analysis/psa.js';
 import { parseModel } from '../js/core/model.js';
+
+const load = (f) => parseModel(readFileSync(new URL(`../examples/${f}`, import.meta.url), 'utf8'));
 
 test('psa is seeded-reproducible and shares draws across strategies', () => {
   const m = parseModel(`
@@ -28,6 +31,20 @@ strategies:
   assert.deepEqual(r1.samples[0], r2.samples[0]);
   // identical strategies + shared draw => identical outcomes per iteration
   for (const s of r1.samples) assert.equal(s.cost.usual, s.cost.discount10);
+});
+
+// Regression: tree models have no `strategies:` block, so model.strategies is just the implicit
+// {base} registry — nothing to do with the tree's actual root-children strategy names (Surgery,
+// Medication). psa() must derive strategy names from run()'s own result, not model.strategies, or
+// this crashes on every tree model.
+test('psa on a tree model runs without throwing and keys samples by root-branch names', () => {
+  const m = load('surgery.yaml');
+  const r1 = psa(m, { n: 10, seed: 11 });
+  const r2 = psa(m, { n: 10, seed: 11 });
+  assert.equal(r1.samples.length, 10);
+  assert.deepEqual(new Set(r1.strategies), new Set(['Surgery', 'Medication']));
+  assert.deepEqual(Object.keys(r1.samples[0].cost).sort(), ['Medication', 'Surgery']);
+  assert.deepEqual(r1, r2); // seeded reproducibility
 });
 
 test('evpi and ceac on hand-built samples', () => {

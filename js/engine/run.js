@@ -41,7 +41,7 @@ function evalChanceSubtree(subModel, subEnv, attach) {
 // (a top-level sub-model's terminal referencing another top-level sub-model, without redeclaring
 // it in its own `models:` block) resolve correctly. CONTROLLER RULING (supersedes the earlier
 // per-model-local-only design): lookup is own-first-then-ancestors, not scope-local-only.
-function lookupSubModel(chain, name) {
+export function lookupSubModel(chain, name) {
   for (const registry of chain) {
     if (registry && Object.prototype.hasOwnProperty.call(registry, name)) return registry[name];
   }
@@ -79,6 +79,16 @@ function makeAttach(chain, topDiscount, depthBox) {
         return { cost: totals.cost, qaly: totals.qaly, extras: totals.extras };
       }
       if (subModel.type === 'tree') {
+        // A tree has no time axis (runTree never discounts — see tree.js's module doc), so
+        // `delay` has nowhere to apply: unlike a markov sub-model attachment (delayYears feeds
+        // runMarkov's discount timing directly), a nonzero delay on a tree attachment would be
+        // silently ignored rather than doing anything meaningful. Fail loud instead of accepting a
+        // model author's `delay:` that quietly does nothing.
+        if (delayYears !== 0)
+          throw new ModelError(
+            `tree.${node.name}: delay on a tree sub-model attachment is not supported in v1`,
+            { path: `tree.${node.name}` }
+          );
         return evalChanceSubtree(subModel, subEnv, makeAttach([subModel, ...chain], topDiscount, depthBox));
       }
       throw new ModelError(`models.${node.model}: unsupported sub-model type '${subModel.type}'`, { path: `models.${node.model}` });

@@ -337,6 +337,23 @@ export function runMarkov(model, env, { discount = {}, delayYears = 0 } = {}) {
     if (!rows0[name])
       throw new MarkovError(`transitions.${name}: missing row for state '${name}'`, { path: `transitions.${name}` });
   }
+
+  // A transition target that names an undeclared state (a typo'd state name, e.g. 'daed' for
+  // 'dead') would otherwise silently lose mass: advance() writes into mNext[target] for whatever
+  // key the row names, but every subsequent cycle only sums over the fixed, DECLARED stateNames —
+  // so a bad target's mass is credited once, then vanishes with no error at all. Fail loud instead,
+  // for both p-rows (row.to targets) and multinomial rows (counts targets).
+  const stateNameSet = new Set(stateNamesOrig);
+  for (const [from, r] of Object.entries(rows0)) {
+    const targets = r.type === 'multinomial' ? r.names : r.entries.map((e) => e.to);
+    for (const target of targets) {
+      if (!stateNameSet.has(target))
+        throw new MarkovError(
+          `transitions.${from}: transition target '${target}' is not a defined state`,
+          { path: `transitions.${from}` }
+        );
+    }
+  }
   const { compiledByState: compiledByState0, extraNames } = compilePayoffs(model);
 
   const tunnelStates = detectTunnelStates(rows0, compiledByState0);

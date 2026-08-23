@@ -1,20 +1,13 @@
 import { compile, ExprError } from '../core/expr.js';
 import { makeEnv } from '../engine/resolve.js';
+// Sub-model lookup CHAINS lexically — own model's `models:` registry first, then ancestors up to
+// the top level. Imported (not hand-kept) so check.js's E_SUBMODEL_MISSING/E_SUBMODEL_CYCLE stay
+// bound to the SAME chaining rule run.js actually uses at runtime, or check and run could silently
+// drift apart on which references are valid.
+import { lookupSubModel } from '../engine/run.js';
 
 const TOL = 1e-6;
 const isRestSrc = (src) => typeof src === 'string' && src.trim() === 'rest';
-
-// Sub-model lookup CHAINS lexically — own model's `models:` registry first, then ancestors up to
-// the top level. This is a deliberate, hand-kept copy of js/engine/run.js's (unexported)
-// lookupSubModel: controller ruling binds E_SUBMODEL_MISSING/E_SUBMODEL_CYCLE to the SAME
-// chaining rule run.js actually uses at runtime, or check and run would silently disagree about
-// which references are valid.
-function lookupSubModel(registries, name) {
-  for (const reg of registries) {
-    if (reg && Object.prototype.hasOwnProperty.call(reg, name)) return reg[name];
-  }
-  return undefined;
-}
 
 // Evaluate one expression source (mean-mode env) purely to classify a failure into one of our
 // finding codes. Returns the numeric value on success, or `undefined` on any failure (having
@@ -54,8 +47,13 @@ function tryEval(src, env, path, findings) {
         findings.push({ level: 'error', code: 'E_PARAM_CYCLE', path, message: e.message });
         return undefined;
       }
+      // Any other ExprError (unknown function, wrong arity, bad lookup table, ...) is still a
+      // model that cannot run — check() must not report zero errors for it. Catch-all, so every
+      // ExprError not already classified above still surfaces as a finding.
+      findings.push({ level: 'error', code: 'E_EXPR', path, message: e.message });
+      return undefined;
     }
-    return undefined; // some other expr error (unknown function, bad lookup table, ...) — out of our code list
+    return undefined; // a non-ExprError eval failure (should not happen in practice) — defensive no-op
   }
 }
 
