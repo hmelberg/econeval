@@ -100,9 +100,19 @@
 // error otherwise (10x rapid tab/strategy switching reproduced it on every cycle before the catch
 // was added). `activeChartRenderer`'s own in-place `plotly.react(el, ...)` re-render (theme change)
 // reuses the SAME div and must NOT call `mountChart` (that would double-add/double-purge it) — but
-// still needs its own `.catch(() => {})` for the same race, see `renderTraceTab`. T5's chart-bearing
-// tabs must follow the same "new chart -> mountChart(el, spec); in-place re-render -> bare
-// `plotly.react(...).catch(() => {})`" split — `purgeCharts()`/`renderBody()` need no per-tab changes.
+// still needs its own `.catch(logChartRejection)` for the same race, see `renderTraceTab`. T5's
+// chart-bearing tabs must follow the same "new chart -> mountChart(el, spec); in-place re-render ->
+// bare `plotly.react(...).catch(logChartRejection)`" split — `purgeCharts()`/`renderBody()` need no
+// per-tab changes.
+//
+// Controller amendment (Task 5 review): every one of these `.catch(...)` handlers — the
+// purge-raced-the-render rejection is expected/benign, per the above — MUST still log it via
+// `logChartRejection` (`console.debug('plotly render rejected', err)`, defined just above
+// `mountChart`) rather than swallowing it with a bare `() => {}`. A silent catch can also hide a
+// GENUINE spec/runtime bug inside Plotly's own async render path (as opposed to a synchronous
+// throw inside `buildXSpec`, which never reaches this catch at all) — logging costs nothing (it's
+// `console.debug`, not a user-facing toast/error) and keeps the "expected race" story honest
+// without reintroducing the original unhandled-rejection console error.
 //
 // Extending the tab registry (T6 — Validation is still the one placeholder left): `TABS` (id +
 // label, tab STRIP only) and `TAB_RENDERERS` (id -> () => void, called with bodyEl already
@@ -382,7 +392,7 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
       // pass, harmless since it's try/catch'd, but pointless). Same race-swallow as mountChart below:
       // this render can itself get purged (a tab switch fired right after a theme change) before
       // Plotly's own promise for it settles.
-      plotly.react(chartEl, s2.data, s2.layout, s2.config).catch(() => {});
+      plotly.react(chartEl, s2.data, s2.layout, s2.config).catch(logChartRejection);
     };
 
     wrap.appendChild(buildTraceDetails(traceData));
@@ -414,6 +424,26 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
     return det;
   }
 
+  // Controller amendment (Task 5 review): NEVER render a tornado with tornadoA === tornadoB — an
+  // identical comparator pair makes every bar's ΔNMB exactly 0 (deltaNMB(a,a) cancels), a
+  // misleading all-zero chart rather than a genuine "no difference" finding. This can happen two
+  // ways: (1) manually — both <select>s list the same unfiltered strategy names, so nothing stops
+  // a user picking the same one twice (the change handlers below fix this case via a swap); (2)
+  // automatically — tornadoA/tornadoB are clamped to the live strategy list INDEPENDENTLY on every
+  // render (each just needs to be `.includes()`d), so a model swap can land both on the same name
+  // even though neither line individually did anything wrong. Called on every render as the single
+  // place that enforces the invariant regardless of how it could have been broken.
+  // `availability(model).tornado.ok` (checked by the caller before this ever runs) already
+  // guarantees `strategies.length >= 2`, so `strategies.find(s => s !== tornadoA)` always succeeds
+  // in practice — the `?? null` fallback is defensive only, never actually reached.
+  function resolveTornadoAB(strategies) {
+    if (!strategies.includes(tornadoA)) tornadoA = strategies[0] ?? null;
+    if (!strategies.includes(tornadoB)) tornadoB = strategies.find((s) => s !== tornadoA) ?? strategies[0] ?? null;
+    if (tornadoA !== null && tornadoA === tornadoB) {
+      tornadoB = strategies.find((s) => s !== tornadoA) ?? null;
+    }
+  }
+
   function renderTornadoTab() {
     const { model, parseError } = store.get();
     if (parseError || !model) { renderPlaceholder('Fix the YAML error to see the Tornado analysis.'); return; }
@@ -428,8 +458,7 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
     let strategies, bars;
     try {
       strategies = strategyNamesOf(model);
-      if (!strategies.includes(tornadoA)) tornadoA = strategies[0] ?? null;
-      if (!strategies.includes(tornadoB)) tornadoB = strategies[1] ?? strategies[0] ?? null;
+      resolveTornadoAB(strategies);
       bars = runTornado(model, { a: tornadoA, b: tornadoB, wtp: lastGoodWtp });
     } catch {
       // availability() only checks structural preconditions (>=2 strategies, >=1 bounded param) —
@@ -447,8 +476,24 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
       ...strategies.map((s) => h('option', { value: s, selected: s === tornadoA ? '' : undefined }, s)));
     const selB = h('select', { class: 'res-select', 'aria-label': 'Comparator B' },
       ...strategies.map((s) => h('option', { value: s, selected: s === tornadoB ? '' : undefined }, s)));
-    selA.addEventListener('change', () => { tornadoA = selA.value; renderBody(); });
-    selB.addEventListener('change', () => { tornadoB = selB.value; renderBody(); });
+    // Controller amendment: picking a value that collides with the OTHER select swaps them
+    // (classic exchange) rather than leaving both selects on the same name — e.g. A=mono/B=combo,
+    // user picks "combo" in A -> B becomes the old A value ("mono"), A becomes "combo": both
+    // strategies stay represented, just on opposite sides. `resolveTornadoAB` (called from
+    // renderTornadoTab on every render, including the one this triggers) is a second, independent
+    // safety net for the case NEITHER handler runs (e.g. a model swap resets both selections).
+    selA.addEventListener('change', () => {
+      const next = selA.value;
+      if (next === tornadoB) tornadoB = tornadoA;
+      tornadoA = next;
+      renderBody();
+    });
+    selB.addEventListener('change', () => {
+      const next = selB.value;
+      if (next === tornadoA) tornadoA = tornadoB;
+      tornadoB = next;
+      renderBody();
+    });
     wrap.appendChild(h('div', { class: 'res-tornado-selects' },
       h('label', {}, 'A ', selA), h('label', {}, 'B ', selB)));
 
@@ -459,7 +504,7 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
     mountChart(chartEl, spec);
     activeChartRenderer = () => {
       const s2 = buildTornadoSpec(bars, readTheme());
-      plotly.react(chartEl, s2.data, s2.layout, s2.config).catch(() => {});
+      plotly.react(chartEl, s2.data, s2.layout, s2.config).catch(logChartRejection);
     };
 
     wrap.appendChild(buildTornadoDetails(bars));
@@ -603,9 +648,9 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
     // re-renders the full set in place.
     activeChartRenderer = () => {
       const s2 = buildSpecs(readTheme());
-      plotly.react(planeEl, s2.plane.data, s2.plane.layout, s2.plane.config).catch(() => {});
-      plotly.react(ceacEl, s2.ceac.data, s2.ceac.layout, s2.ceac.config).catch(() => {});
-      plotly.react(evpiEl, s2.evpi.data, s2.evpi.layout, s2.evpi.config).catch(() => {});
+      plotly.react(planeEl, s2.plane.data, s2.plane.layout, s2.plane.config).catch(logChartRejection);
+      plotly.react(ceacEl, s2.ceac.data, s2.ceac.layout, s2.ceac.config).catch(logChartRejection);
+      plotly.react(evpiEl, s2.evpi.data, s2.evpi.layout, s2.evpi.config).catch(logChartRejection);
     };
 
     wrap.appendChild(h('div', { class: 'res-psa-section' },
@@ -673,10 +718,18 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
     validation: renderValidationTab,
   };
 
+  // Controller amendment (Task 5 review): the ONE handler every `plotly.react(...).catch(...)`
+  // site in this module must pass — logs the (expected, benign — see below) purge-raced-the-render
+  // rejection via `console.debug` instead of silently swallowing it, so a genuinely broken chart
+  // spec/runtime error occurring inside Plotly's own async pipeline still surfaces somewhere.
+  function logChartRejection(err) {
+    console.debug('plotly render rejected', err);
+  }
+
   // Review fix (Important): the two-step "mount a NEW chart div" pattern every chart-bearing tab
   // (Trace here; T5's Tornado/PSA/CE-plane/CEAC/EVPI) must use — `plotly.react(el, ...)` to draw it,
-  // `chartRegistry.add(el)` so `purgeCharts()` can tear it down later. The `.catch(() => {})` on the
-  // react() call is NOT optional: `plotly.react`/`newPlot` return a promise that can still be
+  // `chartRegistry.add(el)` so `purgeCharts()` can tear it down later. The `.catch(logChartRejection)`
+  // on the react() call is NOT optional: `plotly.react`/`newPlot` return a promise that can still be
   // settling (Plotly's own internal layout/render pipeline) when a fast subsequent tab/strategy
   // switch calls `purgeCharts()` on this same div before that promise resolves — Plotly's internal
   // continuation then throws trying to read state off the now-purged div, surfacing as an "Uncaught
@@ -686,7 +739,7 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
   // `plotly.react` call in `renderTraceTab` below) needs the same `.catch` but must NOT call
   // `mountChart`/re-add the element — it isn't a new chart.
   function mountChart(el, spec) {
-    plotly.react(el, spec.data, spec.layout, spec.config).catch(() => {});
+    plotly.react(el, spec.data, spec.layout, spec.config).catch(logChartRejection);
     chartRegistry.add(el);
   }
 
