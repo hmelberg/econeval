@@ -60,7 +60,7 @@ button, input, textarea, select {
   padding: var(--sp-1) var(--sp-2);
   border-radius: var(--radius-sm);
 }
-#model-name[contenteditable="true"] {
+#model-name[contenteditable="true"]:not(:focus-visible) {
   outline: 1px dashed var(--line);
 }
 
@@ -192,13 +192,15 @@ button:active {
   min-height: 0;
   resize: none;
   border: none;
-  outline: none;
   padding: var(--sp-3);
   background: var(--surface);
   color: var(--ink);
   font-family: var(--font-data);
   font-size: var(--fs-1);
   line-height: 1.5;
+}
+#yaml-text:focus:not(:focus-visible) {
+  outline: none;
 }
 
 #yaml-error {

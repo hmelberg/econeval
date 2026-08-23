@@ -113,3 +113,26 @@ test('app.css: #workspace grid-template-columns line matches the binding chrome 
     'app.css must contain the exact grid-template-columns declaration from the plan'
   );
 });
+
+test('app.css: every "outline: none" is scoped with :not(:focus-visible), never an unconditional override', () => {
+  // Regression: an unconditional `outline: none` on a selector with ID (or other
+  // higher) specificity permanently beats the global `:focus-visible` ring rule,
+  // silently defeating the "focus ring on every interactive element" requirement.
+  // Walk each (selector { declarations }) rule and, for any block that sets
+  // outline: none, require the selector itself to carry :not(:focus-visible).
+  const ruleRe = /([^{}]+)\{([^{}]*)\}/g;
+  let m;
+  let checked = 0;
+  while ((m = ruleRe.exec(appCss))) {
+    const selector = m[1].trim();
+    const decls = m[2];
+    if (/outline\s*:\s*none/i.test(decls)) {
+      checked++;
+      assert.ok(
+        selector.includes(':not(:focus-visible)'),
+        `unconditional "outline: none" on selector "${selector}" — must be scoped with :not(:focus-visible) so it never beats the global focus ring`
+      );
+    }
+  }
+  assert.ok(checked > 0, 'expected at least one outline: none declaration in app.css to check');
+});
