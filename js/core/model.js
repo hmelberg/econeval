@@ -164,6 +164,13 @@ const MODEL_FIELD_KEYS = new Set([
 // Any other *mapping*-valued key is a child node; any other *scalar*-valued key is an extra
 // tracked payoff.
 
+// Reserved tree-node attribute keys — also used by the serializer: a CHILD whose name is one of
+// these must be re-emitted under an explicit `children:` block, never inline, or re-parsing
+// would reinterpret the name as a reserved attribute of the parent instead of a child.
+const TREE_RESERVED_KEYS = new Set([
+  'p', 'cost', 'utility', 'source', 'notes', 'children', 'model', 'with', 'delay', 'kind',
+]);
+
 function normTreeWith(raw, path) {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw))
     throw new ModelError(`${path}.with: must be a mapping`, { path: `${path}.with` });
@@ -545,7 +552,19 @@ function treeNodeToPlain(node) {
   if (node.source !== undefined) out.source = node.source;
   if (node.notes !== undefined) out.notes = node.notes;
   Object.assign(out, node.payoffs);
-  for (const child of node.children) out[child.name] = treeNodeToPlain(child);
+
+  // A child whose name collides with a reserved attribute key (e.g. a branch literally named
+  // "cost" or "p") must go under an explicit `children:` block — emitting it inline would make
+  // re-parsing treat the name as an attribute of THIS node instead of a child. Non-reserved
+  // names keep emitting inline, as before.
+  const explicitChildren = {};
+  for (const child of node.children) {
+    const plainChild = treeNodeToPlain(child);
+    if (TREE_RESERVED_KEYS.has(child.name)) explicitChildren[child.name] = plainChild;
+    else out[child.name] = plainChild;
+  }
+  if (Object.keys(explicitChildren).length > 0) out.children = explicitChildren;
+
   return out;
 }
 

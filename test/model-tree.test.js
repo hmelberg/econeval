@@ -87,3 +87,21 @@ tree:
 `);
   assert.deepEqual(ok.tree.children[0].children.map(c => c.name), ['Leaf1', 'Leaf2']);
 });
+
+test('reserved-word-named children round-trip via explicit children: on serialize', () => {
+  const m = parseModel(`
+econeval: 1
+type: tree
+name: reserved-names
+tree:
+  Root:
+    children:
+      cost: {p: 0.3, utility: 1}
+      p: {p: 0.3, utility: 0.5}
+      kind: {p: rest, utility: 0}
+`);
+  assert.deepEqual(m.tree.children.map(c => c.name), ['cost', 'p', 'kind']);
+  const text = serializeModel(m);
+  assert.match(text, /children:/);
+  assert.deepEqual(parseModel(text), m);
+});
