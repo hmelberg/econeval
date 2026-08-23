@@ -279,7 +279,17 @@ export function createInspector(rootEl, tabsEl, store, { flush = () => {} } = {}
       }
     });
     inputEl.addEventListener('blur', () => {
-      setTimeout(() => render(), 0);
+      setTimeout(() => {
+        // Review fix (Critical): if focus landed on ANOTHER typing target inside rootEl (the user
+        // tabbed/clicked from this field straight into the next one), a full render() here would
+        // rebuild every field element out from under it a tick later, destroying its focus (falls
+        // to body) mid-entry. Reuses shouldSkipRender()'s own typing-target arm so the two stay in
+        // lockstep. Blurring OUT of the panel entirely (canvas, body, a button, ...) still renders,
+        // so the panel reconciles promptly as before.
+        const active = document.activeElement;
+        if (isTypingTarget(active) && rootEl.contains(active)) return;
+        render();
+      }, 0);
     });
   }
 
@@ -532,6 +542,54 @@ export function createInspector(rootEl, tabsEl, store, { flush = () => {} } = {}
     });
   }
 
+  // Review fix (Important): the canvas is the only pre-existing way to create a selection — a
+  // keyboard-only or pointer-free user had no way to reach the Selection tab's fields at all.
+  // Small, deliberately simple addition: in the empty state, a labeled <select> listing every
+  // markov state / tree node (path, root inclusive — same entities a canvas click can select) of
+  // the CURRENT TOP-LEVEL model; choosing one calls store.select with modelPath: [] (this picker
+  // only ever addresses the top-level model, matching the "current top-level model" brief — a
+  // sub-model selection is still made by drilling in via canvas, same as today).
+  //
+  // Walks a tree collecting every node's path (root inclusive, in document order) — the exact
+  // path convention ops.nodeAt/canvas.js's own nodeIndex use (array of names from the root).
+  function collectTreePaths(node, path, out) {
+    out.push(path);
+    for (const child of node.children) collectTreePaths(child, [...path, child.name], out);
+  }
+
+  function renderSelectionPicker(container, topModel) {
+    const options = []; // { label, sel } in <select> order
+    if (topModel.type === 'markov') {
+      for (const s of topModel.states) {
+        options.push({ label: s.name, sel: { kind: 'state', id: s.name, modelPath: [] } });
+      }
+    } else if (topModel.type === 'tree' && topModel.tree) {
+      const paths = [];
+      collectTreePaths(topModel.tree, [topModel.tree.name], paths);
+      for (const path of paths) {
+        options.push({ label: path.join(' → '), sel: { kind: 'node', id: path, modelPath: [] } });
+      }
+    }
+    if (options.length === 0) return; // nothing to offer (e.g. a markov model with zero states)
+
+    const select = h('select', { 'aria-label': 'Select on canvas, or choose here' },
+      h('option', { value: '' }, '(choose)'),
+      ...options.map((o, i) => h('option', { value: String(i) }, o.label)),
+    );
+    select.addEventListener('change', () => {
+      if (select.value === '') return;
+      store.select(options[Number(select.value)].sel);
+      // Structural change (empty state -> a whole different set of fields), not a value tweak on
+      // an existing field — the native <select> already shows the new value on its own, but
+      // nothing else re-renders on its behalf. onStoreChange's own shouldSkipRender() would in
+      // fact SKIP this notification (a <select> is a typing target, and the OLD (empty) selection
+      // is trivially "resolvable"), so render() is called directly here rather than relying on it.
+      render();
+    });
+    const { row } = fieldRow('Select on canvas, or choose here:', select);
+    container.appendChild(row);
+  }
+
   function appendScopeHint(container, modelPath) {
     if (!modelPath || modelPath.length === 0) return;
     const label = modelPath.join(' → ');
@@ -544,6 +602,7 @@ export function createInspector(rootEl, tabsEl, store, { flush = () => {} } = {}
     const selection = state.selection ?? { kind: null, id: null };
     if (!selection.kind) {
       container.appendChild(h('p', { class: 'insp-empty' }, 'Select a state, branch, or transition on the canvas.'));
+      renderSelectionPicker(container, topModel);
       renderModelFindingsSection(container);
       return;
     }

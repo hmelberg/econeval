@@ -432,6 +432,11 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
 
   if (typeof document !== 'undefined') {
     document.addEventListener('keydown', (e) => {
+      // Review fix (Important): a modal <dialog> (New/Open/Examples) owns keyboard input while
+      // open — without this guard, Escape's preventDefault() stopped the dialog's own native
+      // close, and Delete/Backspace could delete the canvas's current selection from underneath a
+      // dialog the user is filling in. Early-return before any of this handler's own key handling.
+      if (document.querySelector('dialog[open]')) return;
       if (isTypingTarget(e.target)) return;
       if (e.key === 'Escape') { e.preventDefault(); escapeAll(); return; }
       if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelection(); return; }

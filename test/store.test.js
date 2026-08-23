@@ -173,6 +173,41 @@ test('markSaved clears dirty', () => {
   assert.equal(store.get().dirty, false);
 });
 
+// --- Final-review fix: resetHistory() (app.js's loadDocument calls this after setText, so New/
+// Open/Examples/Import never leave the PREVIOUS document's undo/redo stacks reachable — undoing
+// right after a load must not cross-save into an unrelated document's snapshots). ---
+
+test('resetHistory clears both stacks: canUndo/canRedo go false, undo()/redo() become no-ops', () => {
+  const store = createStore(GOOD);
+  store.applyOp((m) => ops.addState(m));
+  store.applyOp((m) => ops.addState(m, 'other'));
+  store.undo();
+  assert.equal(store.get().canUndo, true);
+  assert.equal(store.get().canRedo, true);
+
+  store.resetHistory();
+  const after = store.get();
+  assert.equal(after.canUndo, false);
+  assert.equal(after.canRedo, false);
+  // Text/model/selection/dirty are untouched by resetHistory itself.
+  assert.equal(after.text, store.get().text);
+
+  const before = store.get();
+  assert.doesNotThrow(() => store.undo());
+  assert.deepEqual(store.get(), before);
+  assert.doesNotThrow(() => store.redo());
+  assert.deepEqual(store.get(), before);
+});
+
+test('resetHistory notifies subscribers', () => {
+  const store = createStore(GOOD);
+  store.applyOp((m) => ops.addState(m));
+  let calls = 0;
+  store.subscribe(() => { calls += 1; });
+  store.resetHistory();
+  assert.equal(calls, 1);
+});
+
 // --- Review fixes: critical + important issues found in the task-5 review. ---
 
 test('a bad setText clears redoStack too, so a later redo/undo cannot crash on corrupted history', () => {
@@ -295,6 +330,30 @@ test('undo() when parseError is set reverts the bad buffer instead of consuming 
   s = store.get();
   assert.ok(s.model.states.some((st) => st.name === 'state1'));
   assert.equal(s.parseError, null);
+});
+
+// --- Final-review fix: undo()/redo() on a bad-autosave boot (model === null from the start). ---
+//
+// T12 autosaves the raw text even while parseError is set (there's no "last good" text to fall
+// back to at that point — the raw buffer IS the only thing to persist). Reloading with that
+// autosave as createStore's initialText leaves model === null and parseError set from the very
+// first line of createStore, never having had a good parse at all. undo()/redo()'s parseError
+// branch used to call serializeModel(model) unconditionally, which throws on a null model —
+// reachable on ordinary reload, not just a contrived test.
+
+test('undo()/redo() on a store booted with bad text and no last-good model are safe no-ops', () => {
+  const store = createStore('not: valid: [');
+  const before = store.get();
+  assert.ok(before.parseError);
+  assert.equal(before.model, null);
+  assert.equal(before.canUndo, false);
+  assert.equal(before.canRedo, false);
+
+  assert.doesNotThrow(() => store.undo());
+  assert.deepEqual(store.get(), before);
+
+  assert.doesNotThrow(() => store.redo());
+  assert.deepEqual(store.get(), before);
 });
 
 // --- Task 10 controller ruling: scoped selection (selection.modelPath). ---

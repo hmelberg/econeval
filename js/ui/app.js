@@ -121,6 +121,7 @@ function slugify(name) {
 function loadDocument(text) {
   sync.dispose();
   store.setText(text);
+  store.resetHistory(); // a freshly loaded document starts with clean undo/redo, never the previous document's stacks
   store.markSaved();
 }
 
@@ -385,7 +386,17 @@ function saveVersion() {
   const raw = window.prompt('Label for this version (optional):', '');
   if (raw === null) return; // cancelled
   const label = raw.trim() || undefined;
-  currentModelId = reg.saveVersion(currentModelId, model.name, text, label);
+  // Review fix (Important): reg.saveVersion writes through localStorage.setItem, which can throw
+  // (quota exceeded, private-browsing storage blocked, ...). Previously that exception propagated
+  // uncaught out of this click/keydown handler — silently failing (nothing visible changes) while
+  // still leaving the document marked dirty, which is at least honest, but gives the user no idea
+  // the save never happened. Surface it, and do NOT markSaved (the document truly wasn't saved).
+  try {
+    currentModelId = reg.saveVersion(currentModelId, model.name, text, label);
+  } catch (err) {
+    window.alert('Could not save: ' + err.message);
+    return;
+  }
   store.markSaved();
 }
 

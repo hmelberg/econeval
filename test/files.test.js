@@ -242,3 +242,17 @@ test('corrupt JSON under the registry key does not affect autosave (separate key
   reg.autosave('draft');
   assert.equal(reg.readAutosave(), 'draft');
 });
+
+// --- Final-review fix: saveVersion propagates a storage.setItem failure (e.g. quota exceeded)
+// rather than swallowing it. Unlike autosave() (deliberately best-effort — see its own comment
+// above), saveVersion is the user's explicit, durable "Save" action; app.js's caller wraps this in
+// its own try/catch to alert() the user and skip markSaved(), so the failure must actually reach
+// the caller instead of looking like a silent success. writeIndex() has no try/catch of its own —
+// this test is really pinning down that "don't add one", not exercising new files.js code.
+
+test('saveVersion propagates a storage.setItem failure instead of swallowing it', () => {
+  const storage = fakeStorage();
+  storage.setItem = () => { throw new Error('QuotaExceededError'); };
+  const reg = createRegistry(storage);
+  assert.throws(() => reg.saveVersion(null, 'Model', 'v0'), /QuotaExceededError/);
+});

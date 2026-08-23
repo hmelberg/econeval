@@ -151,6 +151,12 @@ export function createStore(initialText) {
       // buffer back to the current (last-good) model's own text, touching neither stack. The next
       // undo() call then proceeds as normal, popping the real snapshot.
       if (parseError) {
+        // Review fix (Important): a store can boot with parseError set AND model still null (a
+        // bad-autosave boot — T12 autosaves the raw text even while a parse error is showing, so
+        // reloading with that autosave as initialText leaves model === null from the very start).
+        // serializeModel(null) throws; there is no last-good model to revert the buffer to, so
+        // this is a genuine no-op, not a crash.
+        if (!model) return;
         text = serializeModel(model);
         parseError = null;
         dirty = true;
@@ -169,8 +175,10 @@ export function createStore(initialText) {
     },
 
     redo() {
-      // Same invariant/guard as undo() above — see its comment.
+      // Same invariant/guard as undo() above — see its comment (including the model === null
+      // bad-autosave-boot case).
       if (parseError) {
+        if (!model) return;
         text = serializeModel(model);
         parseError = null;
         dirty = true;
@@ -191,6 +199,17 @@ export function createStore(initialText) {
 
     markSaved() {
       dirty = false;
+      notify();
+    },
+
+    // Review fix (Important): loading a brand-new document (New/Open/Examples/Import) must not
+    // leave the PREVIOUS document's undo/redo history reachable — undoing right after a load
+    // would otherwise cross-save into an unrelated document's snapshots. Clears both stacks and
+    // notifies (canUndo/canRedo flip to false); does not touch text/model/selection/dirty —
+    // setText's own snapshot behavior is unchanged, this only wipes what came before it.
+    resetHistory() {
+      undoStack.length = 0;
+      redoStack = [];
       notify();
     },
 
