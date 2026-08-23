@@ -127,6 +127,19 @@ export function createStore(initialText) {
     },
 
     undo() {
+      // Invariant: undoStack/redoStack only ever hold GOOD text (each entry must re-parse
+      // cleanly). The live `text` buffer can currently be bad (parseError set) without either
+      // stack knowing about it — e.g. after setText(bad). In that case undo/redo must never push
+      // that unvalidated buffer onto a stack; instead, "undo" the bad typing itself: snap the
+      // buffer back to the current (last-good) model's own text, touching neither stack. The next
+      // undo() call then proceeds as normal, popping the real snapshot.
+      if (parseError) {
+        text = serializeModel(model);
+        parseError = null;
+        dirty = true;
+        notify();
+        return;
+      }
       if (undoStack.length === 0) return;
       const prevText = undoStack.pop();
       redoStack.push(text);
@@ -139,6 +152,14 @@ export function createStore(initialText) {
     },
 
     redo() {
+      // Same invariant/guard as undo() above — see its comment.
+      if (parseError) {
+        text = serializeModel(model);
+        parseError = null;
+        dirty = true;
+        notify();
+        return;
+      }
       if (redoStack.length === 0) return;
       const nextText = redoStack.pop();
       undoStack.push(text);

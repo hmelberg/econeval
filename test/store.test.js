@@ -177,11 +177,20 @@ test('markSaved clears dirty', () => {
 
 test('a bad setText clears redoStack too, so a later redo/undo cannot crash on corrupted history', () => {
   // Reproduces the reported crash sequence exactly: applyOp -> undo -> setText(bad) -> redo ->
-  // undo. Before the fix, setText's failure branch left a stale redoStack entry in place; redo()
-  // would then push the BAD text onto undoStack, and the final undo() would try to re-parse it
-  // and throw an uncaught ModelError. (Without the intervening redo() call this sequence never
-  // reproduces the crash at all — undo() on an empty stack is always a safe no-op — so the redo()
-  // call is included here even though it isn't spelled out step-by-step in the ticket.)
+  // undo. Before the round-1 fix, setText's failure branch left a stale redoStack entry in place;
+  // redo() would then push the BAD text onto undoStack, and the final undo() would try to
+  // re-parse it and throw an uncaught ModelError. (Without the intervening redo() call this
+  // sequence never reproduces the crash at all — undo() on an empty stack is always a safe no-op
+  // — so the redo() call is included here even though it isn't spelled out step-by-step in the
+  // ticket.)
+  //
+  // NOTE (round 2): with the parseError-guard added to undo()/redo() (see the "round-2 review
+  // fix" tests below), this redo() call no longer merely no-ops on an empty redoStack — since
+  // parseError is set at that point, it takes the guard branch and actively reverts the bad
+  // buffer to the last-good model's own text. That's the correct, improved behavior (redo()
+  // symmetric with undo() — see the controller's ruling), so this test's final assertions were
+  // updated accordingly: the point of THIS test is still "the whole sequence never throws", not
+  // "the bad text survives untouched".
   const store = createStore(GOOD);
   store.applyOp((m) => ops.addState(m));
   store.undo(); // back to GOOD; redoStack now holds the post-addState text
@@ -190,12 +199,13 @@ test('a bad setText clears redoStack too, so a later redo/undo cannot crash on c
   store.setText('not: valid: yaml: [');
   assert.equal(store.get().canRedo, false); // the direct regression check: ANY setText clears redo
 
-  assert.doesNotThrow(() => store.redo()); // no-op: redoStack is empty
-  assert.doesNotThrow(() => store.undo()); // no-op: undoStack is empty too — this used to throw
+  assert.doesNotThrow(() => store.redo()); // parseError is set -> reverts the bad buffer; no throw
+  let s = store.get();
+  assert.equal(s.parseError, null);
+  assert.equal(s.text, serializeModel(s.model));
 
-  const s = store.get();
-  assert.equal(s.text, 'not: valid: yaml: ['); // the bad buffer is still shown verbatim (existing contract)
-  assert.ok(s.parseError);
+  assert.doesNotThrow(() => store.undo()); // no-op: nothing left on undoStack — this used to throw
+  s = store.get();
   // The last-good MODEL is unaffected by the whole redo()/undo() detour: still the pre-bad-edit
   // model (no 'state1' — that was undone before the bad edit was ever typed).
   assert.equal(s.model.states.some((st) => st.name === 'state1'), false);
@@ -241,4 +251,79 @@ test('applyOp: the committed model equals parseModel(serializeModel(fn(model))) 
   store.applyOp((m) => ops.addState(m));
   const s = store.get();
   assert.deepEqual(s.model, parseModel(serializeModel(s.model)));
+});
+
+// --- Round-2 review fix: the symmetric crash on the undo() side. ---
+//
+// Round 1 fixed setText(bad) failing to clear redoStack. But undo() itself had the same class of
+// bug: applyOp -> setText(bad) -> undo() -> redo() still threw, because undo()'s
+// `redoStack.push(text)` ran unconditionally and captured the BAD buffer, which redo() then
+// reparsed unguarded. The controller's ruling: the real invariant is "the stacks only ever hold
+// good text" — enforced by guarding at the top of BOTH undo() and redo(): while parseError is
+// set, revert the buffer to the current (last-good) model's own text and return, touching neither
+// stack. This also gives sensible UX: the first undo() backs out invalid typing; the next one
+// pops the real snapshot.
+
+test('undo() when parseError is set reverts the bad buffer instead of consuming a real snapshot', () => {
+  const store = createStore(GOOD);
+  const initialText = store.get().text;
+
+  assert.doesNotThrow(() => store.applyOp((m) => ops.addState(m)));
+  assert.ok(store.get().model.states.some((s) => s.name === 'state1'));
+
+  assert.doesNotThrow(() => store.setText(BAD));
+  assert.ok(store.get().parseError);
+
+  // First undo(): backs out the bad typing only — reverts the buffer to the last-good model's
+  // own text, without touching either stack.
+  assert.doesNotThrow(() => store.undo());
+  let s = store.get();
+  assert.equal(s.text, serializeModel(s.model));
+  assert.ok(s.model.states.some((st) => st.name === 'state1')); // still the post-addState model
+  assert.equal(s.parseError, null);
+  assert.equal(s.canUndo, true); // the real snapshot (initialText) is still there, untouched
+  assert.equal(s.canRedo, false); // nothing was pushed to redo by this buffer-revert
+
+  // Second undo(): now pops the real snapshot, landing back on the initial text.
+  assert.doesNotThrow(() => store.undo());
+  s = store.get();
+  assert.equal(s.text, initialText);
+  assert.equal(s.model.states.some((st) => st.name === 'state1'), false);
+
+  // redo(): replays the addState change.
+  assert.doesNotThrow(() => store.redo());
+  s = store.get();
+  assert.ok(s.model.states.some((st) => st.name === 'state1'));
+  assert.equal(s.parseError, null);
+});
+
+test('setText(bad) then redo() never throws and never leaks bad text onto a stack, with or without a prior redo entry', () => {
+  // Case A: nothing to redo at all (redoStack already empty when the bad edit happens).
+  const storeA = createStore(GOOD);
+  storeA.setText(BAD);
+  assert.equal(storeA.get().canRedo, false);
+  assert.doesNotThrow(() => storeA.redo());
+  const a = storeA.get();
+  assert.equal(a.parseError, null); // buffer reverted, not left dangling on a bad parse
+  assert.equal(a.canRedo, false);
+  assert.equal(a.canUndo, false);
+
+  // Case B: a real redo entry exists (from undoing a good change) at the moment of the bad edit.
+  const storeB = createStore(GOOD);
+  storeB.applyOp((m) => ops.addState(m));
+  storeB.undo();
+  assert.equal(storeB.get().canRedo, true); // the good entry is there, before the bad edit
+
+  storeB.setText(BAD);
+  assert.equal(storeB.get().canRedo, false); // cleared by setText itself (round-1 fix)
+
+  assert.doesNotThrow(() => storeB.redo()); // parseError-guard branch: reverts buffer, no stack touched
+  const b = storeB.get();
+  assert.equal(b.parseError, null);
+  assert.equal(b.canRedo, false);
+  assert.equal(b.canUndo, false); // the good entry was never resurrected onto undoStack either
+  assert.equal(b.model.states.some((st) => st.name === 'state1'), false); // still pre-addState model
+
+  // Stacks are provably clean afterward: a further undo() is a safe no-op, not a crash.
+  assert.doesNotThrow(() => storeB.undo());
 });
