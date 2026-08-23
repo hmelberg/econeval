@@ -37,6 +37,7 @@
 // tick, after the browser has settled the blur/focus transition) so nothing goes stale for long.
 
 import { compile, ExprError } from '../core/expr.js';
+import { formatCycle } from '../core/model.js';
 import { check } from '../analysis/check.js';
 import { scopedStore } from './canvas.js';
 import { loadLayout, saveLayout } from './panels.js';
@@ -660,7 +661,11 @@ export function createInspector(rootEl, tabsEl, store, { flush = () => {} } = {}
         const v = raw.trim() === '' ? null : raw;
         return ops.setParam(m, name, field, v);
       }));
-      if (isExpr) registerField(`params.${name}.${field}`, err);
+      // check.js only ever emits param findings at .value/.dist (js/analysis/check.js's tryEval
+      // calls) — never at .low/.high, so registering those two as inline finding slots was dead:
+      // they could never receive a match from splitFindings. Pruned to the two paths check.js can
+      // actually produce.
+      if (field === 'value' || field === 'dist') registerField(`params.${name}.${field}`, err);
       return h('td', {}, input, err);
     }
 
@@ -748,7 +753,7 @@ export function createInspector(rootEl, tabsEl, store, { flush = () => {} } = {}
     appendNumberField(container, 'Cycles', topModel.settings.cycles, 'cycles', { nullable: true });
     appendTextSettingField(
       container, 'Cycle length (e.g. "1 year", "6 months")',
-      topModel.settings.cycleYears === 1 ? '1 year' : `${topModel.settings.cycleYears} year`,
+      formatCycle(topModel.settings.cycleYears),
       'cycle',
     );
     appendNumberField(container, 'Discount: cost', topModel.settings.discount.cost, 'discount.cost');
@@ -871,24 +876,50 @@ export function createInspector(rootEl, tabsEl, store, { flush = () => {} } = {}
     render();
   }
 
+  const TAB_KEYS = TABS.map(([key]) => key);
+
+  function focusTab(key) {
+    const btn = tabsEl.querySelector(`#insp-tab-${key}`);
+    if (btn) btn.focus();
+  }
+
+  // Roving-tabindex arrow navigation (WAI-ARIA tabs pattern): ArrowLeft/ArrowRight move AND
+  // activate the adjacent tab (wrapping at the ends) — automatic activation, matching a click.
+  function onTabKeydown(e) {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    const i = TAB_KEYS.indexOf(activeTab);
+    const dir = e.key === 'ArrowRight' ? 1 : -1;
+    setActiveTab(TAB_KEYS[(i + dir + TAB_KEYS.length) % TAB_KEYS.length]);
+  }
+
   function renderTabStrip() {
     let mine = tabsEl.querySelector('#insp-tabs-own');
     if (!mine) {
       mine = h('div', { id: 'insp-tabs-own', class: 'insp-tabstrip', role: 'tablist', 'aria-label': 'Inspector tabs' });
       tabsEl.insertBefore(mine, tabsEl.firstChild);
     }
+    // Preserve focus across the rebuild: every tab <button> is replaced below, which would
+    // otherwise drop keyboard focus to <body> right after a click or an arrow-key move. Captured
+    // BEFORE replaceChildren() destroys the old (still-focused) button.
+    const hadTabFocus = mine.contains(document.activeElement) && document.activeElement.getAttribute('role') === 'tab';
+
     mine.replaceChildren();
     for (const [key, label] of TABS) {
+      const isActive = activeTab === key;
       const btn = h('button', {
         type: 'button', class: 'insp-tab', role: 'tab', id: `insp-tab-${key}`,
-        'aria-selected': String(activeTab === key),
+        'aria-selected': String(isActive), tabindex: isActive ? '0' : '-1',
       }, label);
       btn.addEventListener('click', () => setActiveTab(key));
+      btn.addEventListener('keydown', onTabKeydown);
       mine.appendChild(btn);
     }
     badgeEl = h('span', { class: 'insp-findings-badge' });
     mine.appendChild(badgeEl);
     updateBadge();
+
+    if (hadTabFocus) focusTab(activeTab);
   }
 
   // ---------- top-level render ----------

@@ -185,12 +185,18 @@ test('resetHistory clears both stacks: canUndo/canRedo go false, undo()/redo() b
   assert.equal(store.get().canUndo, true);
   assert.equal(store.get().canRedo, true);
 
+  const beforeReset = store.get(); // snapshot the FULL state before resetHistory (fixes a
+  // tautological assertion: comparing store.get().text to itself, both calls made AFTER
+  // resetHistory, was always true regardless of what resetHistory actually did to the text).
   store.resetHistory();
   const after = store.get();
   assert.equal(after.canUndo, false);
   assert.equal(after.canRedo, false);
   // Text/model/selection/dirty are untouched by resetHistory itself.
-  assert.equal(after.text, store.get().text);
+  assert.equal(after.text, beforeReset.text);
+  assert.deepEqual(after.model, beforeReset.model);
+  assert.deepEqual(after.selection, beforeReset.selection);
+  assert.equal(after.dirty, beforeReset.dirty);
 
   const before = store.get();
   assert.doesNotThrow(() => store.undo());

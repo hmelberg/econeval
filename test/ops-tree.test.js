@@ -89,6 +89,47 @@ test('renameNode rejects a name colliding with a sibling', () => {
   assert.throws(() => ops.renameNode(M(), ['Root', 'A'], 'B'), /exists/);
 });
 
+test('renameNode does not corrupt a sibling whose name is a prefix-collision (A vs AA)', () => {
+  const m = parseModel(`
+econeval: 1
+type: tree
+name: prefix
+tree:
+  Root:
+    A:
+      X: {p: 1, utility: 1}
+    AA:
+      X: {p: 1, utility: 2}
+layout:
+  Root: [0, 0]
+  Root/A: [10, 10]
+  Root/A/X: [20, 20]
+  Root/AA: [30, 30]
+  Root/AA/X: [40, 40]
+`);
+  const m2 = ops.renameNode(m, ['Root', 'A'], 'A2');
+  assert.deepEqual(m2.layout['Root/A2'], [10, 10]);
+  assert.deepEqual(m2.layout['Root/A2/X'], [20, 20]);
+  assert.ok(!('Root/A' in m2.layout));
+  assert.ok(!('Root/A/X' in m2.layout));
+  // The sibling 'AA' subtree must be untouched: a naive prefix-string match (rather than an
+  // exact-segment match) on 'Root/A' would also catch 'Root/AA' and 'Root/AA/X'.
+  assert.deepEqual(m2.layout['Root/AA'], [30, 30]);
+  assert.deepEqual(m2.layout['Root/AA/X'], [40, 40]);
+});
+
+test('renameNode on the root cascades the root layout key and its whole subtree', () => {
+  const m2 = ops.renameNode(M(), ['Root'], 'Root2');
+  assert.equal(m2.tree.name, 'Root2');
+  assert.deepEqual(m2.layout['Root2'], [0, 0]);
+  assert.deepEqual(m2.layout['Root2/A'], [10, 10]);
+  assert.deepEqual(m2.layout['Root2/A/Win'], [20, 20]);
+  assert.deepEqual(m2.layout['Root2/A/Lose'], [20, 40]);
+  assert.deepEqual(m2.layout['Root2/B'], [10, 60]);
+  assert.ok(!('Root' in m2.layout));
+  assert.ok(!('Root/A' in m2.layout));
+});
+
 test('renameNode same-name is a no-op (returns an equal model, does not throw)', () => {
   const m = M();
   const m2 = ops.renameNode(m, ['Root', 'A'], 'A');
@@ -141,6 +182,14 @@ test('setNodePayoff sets and null-removes a payoff', () => {
   assert.equal(ops.nodeAt(m, ['Root', 'A', 'Win']).payoffs.cost, 42);
   m = ops.setNodePayoff(m, ['Root', 'A', 'Win'], 'utility', null);
   assert.ok(!('utility' in ops.nodeAt(m, ['Root', 'A', 'Win']).payoffs));
+});
+
+test('setNodePayoff throws naming the key for reserved extras; cost/utility stay allowed', () => {
+  for (const key of ['source', 'notes', 'p', 'kind', 'children', 'model', 'with', 'delay']) {
+    assert.throws(() => ops.setNodePayoff(M(), ['Root', 'A', 'Win'], key, 1), new RegExp(key));
+  }
+  assert.doesNotThrow(() => ops.setNodePayoff(M(), ['Root', 'A', 'Win'], 'cost', 1));
+  assert.doesNotThrow(() => ops.setNodePayoff(M(), ['Root', 'A', 'Win'], 'utility', 1));
 });
 
 // --- setWith ---

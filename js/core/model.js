@@ -10,6 +10,7 @@ export class ModelError extends Error {
 }
 
 const UNITS = { year: 1, month: 1 / 12, week: 7 / 365.25, day: 1 / 365.25 };
+const UNIT_ORDER = ['year', 'month', 'week', 'day']; // formatCycle's match priority
 
 export function parseCycle(str) {              // "1 year" | "6 months" | number (years)
   if (str == null) return 1;
@@ -17,6 +18,24 @@ export function parseCycle(str) {              // "1 year" | "6 months" | number
   const m = /^\s*([\d.]+)\s*(year|month|week|day)s?\s*$/.exec(String(str));
   if (!m) throw new ModelError(`settings.cycle: cannot parse '${str}' (use e.g. "1 year", "6 months")`, { path: 'settings.cycle' });
   return Number(m[1]) * UNITS[m[2]];
+}
+
+const CYCLE_TOL = 1e-9; // tolerance on the fraction match, per the brief
+
+// formatCycle(years) -> the friendliest unit string that round-trips through parseCycle exactly:
+// tries year, then month, then week, then day (UNIT_ORDER) for an integer count within
+// CYCLE_TOL; a non-matching fraction falls back to decimal years (always singular 'year', never
+// 'years' — e.g. 0.3 -> '0.3 year'). Shared by serializeModel (settings.cycle, tree node delay)
+// and the inspector's Settings display, so the unit table can never drift between them.
+export function formatCycle(years) {
+  for (const unit of UNIT_ORDER) {
+    const k = years / UNITS[unit];
+    if (Math.abs(k - Math.round(k)) < CYCLE_TOL) {
+      const n = Math.round(k);
+      return `${n} ${unit}${n === 1 ? '' : 's'}`;
+    }
+  }
+  return `${years} year`;
 }
 
 const PARAM_KEYS = new Set(['value', 'low', 'high', 'dist', 'source', 'notes']);
@@ -187,7 +206,7 @@ const MODEL_FIELD_KEYS = new Set([
 // Reserved tree-node attribute keys — also used by the serializer: a CHILD whose name is one of
 // these must be re-emitted under an explicit `children:` block, never inline, or re-parsing
 // would reinterpret the name as a reserved attribute of the parent instead of a child.
-const TREE_RESERVED_KEYS = new Set([
+export const TREE_RESERVED_KEYS = new Set([
   'p', 'cost', 'utility', 'source', 'notes', 'children', 'model', 'with', 'delay', 'kind',
 ]);
 
@@ -502,7 +521,7 @@ function collapseStart(startObj) {
 function settingsToPlain(s) {
   const out = {};
   if (s.cycles !== undefined) out.cycles = s.cycles;
-  if (s.cycleYears !== 1) out.cycle = `${s.cycleYears} year`;
+  if (s.cycleYears !== 1) out.cycle = formatCycle(s.cycleYears);
   if (s.discount.cost !== 0 || s.discount.effect !== 0) out.discount = { ...s.discount };
   if (s.correction !== 'half-cycle') out.correction = s.correction;
   if (s.wtp !== null) out.wtp = s.wtp;
@@ -568,7 +587,7 @@ function treeNodeToPlain(node) {
   if (node.p !== undefined) out.p = node.p;
   if (node.model !== undefined) out.model = node.model;
   if (node.with !== undefined) out.with = { ...node.with };
-  if (node.delay !== undefined) out.delay = `${node.delay} year`;
+  if (node.delay !== undefined) out.delay = formatCycle(node.delay);
   if (node.source !== undefined) out.source = node.source;
   if (node.notes !== undefined) out.notes = node.notes;
   Object.assign(out, node.payoffs);

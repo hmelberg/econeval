@@ -142,7 +142,11 @@ function setNameOp(model, newName) {
 // ---------- Topbar: model name (editable), type badge, dirty dot ----------
 // ================================================================================================
 
-nameEl.contentEditable = 'true';
+// index.html already declares contenteditable="plaintext-only" (item 2: plain-text-only paste,
+// role=textbox, aria-label) — this JS assignment only needs to exist for browsers where the
+// attribute failed to parse; setting it to the SAME value here (never 'true') keeps a pasted
+// rich-text name from smuggling markup into the model name field.
+nameEl.contentEditable = 'plaintext-only';
 
 nameEl.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {

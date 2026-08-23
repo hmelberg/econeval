@@ -6,7 +6,14 @@
 // editing (validates model.type === 'tree') plus params/settings ops, which work on BOTH model
 // types and carry no type guard.
 
-import { parseCycle } from '../core/model.js';
+import { parseCycle, TREE_RESERVED_KEYS } from '../core/model.js';
+
+// Reserved on a tree node (model.js's normTreeNode/TREE_RESERVED_KEYS): every reserved key
+// EXCEPT 'cost'/'utility', which are legitimate payoff names (they live IN node.payoffs, same
+// bucket as any other extra scalar field). Writing e.g. 'model' or 'p' into payoffs would
+// silently vanish (or clobber the real node field) the next time the model round-trips through
+// serializeModel/parseModel — same failure mode STATE_PAYOFF_RESERVED guards against below.
+const NODE_PAYOFF_RESERVED = new Set([...TREE_RESERVED_KEYS].filter((k) => k !== 'cost' && k !== 'utility'));
 
 function clone(model) {
   return structuredClone(model);
@@ -198,8 +205,17 @@ export function setTransitionAttr(model, from, to, key, value) {
   return m;
 }
 
+// Reserved on a state mapping (model.js's normStates): 'source'/'notes' are pulled OUT of
+// payoffs into their own state fields — writing them into payoffs here would silently vanish (or
+// clobber the real source/notes field) the next time the model round-trips through
+// serializeModel/parseModel. 'cost'/'utility' are legitimate payoff names (they live IN the
+// payoffs bucket) so they stay allowed.
+const STATE_PAYOFF_RESERVED = new Set(['source', 'notes']);
+
 export function setStatePayoff(model, name, key, value) {
   assertMarkov(model, 'setStatePayoff');
+  if (STATE_PAYOFF_RESERVED.has(key))
+    throw new Error(`setStatePayoff: '${key}' is a reserved key, not a payoff field`);
   const m = clone(model);
   const state = m.states.find((s) => s.name === name);
   if (!state) throw new Error(`setStatePayoff: state '${name}' not found`);
@@ -397,6 +413,8 @@ export function setNodeAttr(model, path, key, value) {
 
 export function setNodePayoff(model, path, key, value) {
   assertTree(model, 'setNodePayoff');
+  if (NODE_PAYOFF_RESERVED.has(key))
+    throw new Error(`setNodePayoff: '${key}' is a reserved key, not a payoff field`);
   const m = clone(model);
   const node = nodeAt(m, path);
 

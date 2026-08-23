@@ -68,6 +68,13 @@ test('payoff and transition attr set/remove', () => {
   assert.equal(m4.transitions.well.to.dead.cost, 500);
 });
 
+test('setStatePayoff throws naming the key for reserved extras (source/notes); cost/utility stay allowed', () => {
+  assert.throws(() => ops.setStatePayoff(M(), 'well', 'source', 'x'), /source/);
+  assert.throws(() => ops.setStatePayoff(M(), 'well', 'notes', 'x'), /notes/);
+  assert.doesNotThrow(() => ops.setStatePayoff(M(), 'well', 'cost', 999));
+  assert.doesNotThrow(() => ops.setStatePayoff(M(), 'well', 'utility', 0.5));
+});
+
 test('every op round-trips through serialize/parse', () => {
   let m = ops.addState(M());
   m = ops.addTransition(m, 'state1', 'dead');
