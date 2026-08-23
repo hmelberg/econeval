@@ -447,10 +447,17 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
   // -------- inline rename (SVG foreignObject over the node) --------
 
   function cancelRename() {
-    if (activeRename) {
-      try { activeRename.fo.remove(); } catch { /* already detached */ }
-      activeRename = null;
-    }
+    // Review fix (Critical): null activeRename BEFORE removing the foreignObject, mirroring
+    // commitRename's existing order. Removing a FOCUSED element fires 'blur' on it synchronously
+    // (real browser behavior) — and the rename input's blur handler does
+    // `if (activeRename) commitRename();`. With the old remove-then-null order, that handler ran
+    // while activeRename was still set, re-entering commitRename() and silently COMMITTING the
+    // edited text instead of cancelling it — on Escape, and on any external re-render while a
+    // rename was open (buildSvg's own cancelRename() cleanup call runs this same path).
+    const rec = activeRename;
+    if (!rec) return;
+    activeRename = null;
+    try { rec.fo.remove(); } catch { /* already detached */ }
   }
 
   function commitRename() {

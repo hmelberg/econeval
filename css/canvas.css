@@ -169,4 +169,7 @@
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-pop);
   z-index: 5;
+  /* Review fix (Important): informational only — must never intercept clicks on the canvas
+     underneath it, which it otherwise would for the full 3.5s it's shown after any op error. */
+  pointer-events: none;
 }
