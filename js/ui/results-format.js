@@ -49,3 +49,19 @@ export function formatRunStamp(strategies, date) {
 export function buildStrategyIndex(strategies) {
   return new Map(strategies.map((name, i) => [name, i]));
 }
+
+// Review fix (Critical): the WTP `<input>`'s raw string value, parsed against a known-good
+// fallback. `Number('')` and `Number('   ')` are both `0` — and `0` is a perfectly finite, legal
+// WTP — so `Number.isFinite(Number(raw))` alone silently commits wtp=0 the instant a user clears
+// the field (before they've typed a replacement digit). Trimmed-empty and non-numeric text both
+// mean "the field doesn't hold a usable value right now" and fall back to `lastGood`; only an
+// actually-parseable number is ever returned as-is (including a real, explicit `0` typed by the
+// user — `'0'` is NOT empty). Callers (results.js's commitWtp/runNow) are expected to also write
+// the returned value back into the input, so a rejected edit visibly reverts rather than leaving
+// stale/incorrect text sitting in the field next to a silently-different in-memory wtp.
+export function parseWtpInput(raw, lastGood) {
+  const trimmed = String(raw ?? '').trim();
+  if (trimmed === '') return lastGood;
+  const n = Number(trimmed);
+  return Number.isFinite(n) ? n : lastGood;
+}

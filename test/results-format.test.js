@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  formatMoney, format4, formatIcer, statusLabel, formatRunStamp, buildStrategyIndex,
+  formatMoney, format4, formatIcer, statusLabel, formatRunStamp, buildStrategyIndex, parseWtpInput,
 } from '../js/ui/results-format.js';
 
 // --- formatMoney ---
@@ -73,4 +73,26 @@ test('buildStrategyIndex: name -> declaration-order slot', () => {
   assert.equal(idx.get('combo'), 1);
   assert.equal(idx.get('triple'), 2);
   assert.equal(idx.get('missing'), undefined);
+});
+
+// --- parseWtpInput ---
+
+test('parseWtpInput: empty string -> lastGood (never silently 0)', () => {
+  assert.equal(parseWtpInput('', 30000), 30000);
+});
+
+test('parseWtpInput: whitespace-only -> lastGood', () => {
+  assert.equal(parseWtpInput('   ', 30000), 30000);
+});
+
+test('parseWtpInput: non-numeric text -> lastGood', () => {
+  assert.equal(parseWtpInput('abc', 30000), 30000);
+});
+
+test('parseWtpInput: "0" is a real, explicit value -> 0, not lastGood', () => {
+  assert.equal(parseWtpInput('0', 30000), 0);
+});
+
+test('parseWtpInput: a valid number string -> that number', () => {
+  assert.equal(parseWtpInput('25000', 30000), 25000);
 });

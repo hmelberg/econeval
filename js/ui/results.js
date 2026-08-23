@@ -12,12 +12,25 @@
 //           UNUSED in this task (Validation has no real rows yet, only an error count).
 //
 // Run flow (public `runBase()`, the method app.js's #btn-run/Ctrl-Enter handler calls):
-//   flush() -> gate(model): errors -> lastGateErrors set, Validation tab, toast, stop (previous
-//   results, if any, are left exactly as they were — see "staleness" below); ok -> runBase()
-//   (analyses.js) -> lastRun captured, CEA tab. Opening the drawer itself (toggle-results via
-//   panels.js if closed) and the Run button's busy/disabled state are app.js's job, NOT this
+//   flush() -> store.get().parseError set? -> toast "Fix the YAML error before running.", stop
+//   (lastRun untouched) -> gate(model): errors -> lastGateErrors set, Validation tab, toast, stop
+//   (previous results, if any, are left exactly as they were — see "staleness" below); ok ->
+//   runBase() (analyses.js) -> lastRun captured, CEA tab. Opening the drawer itself (toggle-results
+//   via panels.js if closed) and the Run button's busy/disabled state are app.js's job, NOT this
 //   module's — createResults's contract has no panels dispatcher, and #btn-run lives in the
 //   topbar, outside paneEl.
+//
+// Review fix (Critical): the parseError check MUST read `store.get().parseError`, never
+// `!store.get().model` — store.js keeps the LAST-GOOD model in place while a live YAML edit fails
+// to parse (parseError set, model still the old non-null value). Guarding on `!model` alone misses
+// that case entirely: Run would silently compute fresh results off the stale last-good model while
+// the YAML pane is showing the user's broken, unparsed text, and lastRun.text would capture that
+// broken text too — which means the "Results are stale" banner (a plain text-inequality check
+// against lastRun.text) would never fire either, since the live (broken) text IS what got
+// snapshotted. `model === null` only happens as a subset of `parseError` being set (the very first
+// parse, at store construction, can leave model null) — checking `parseError` covers both cases in
+// one guard and can never produce a false positive (parseError is only ever set together with, or
+// instead of, a failed parse).
 //
 // Staleness: lastRun.text is a snapshot of store.get().text at the moment that run completed.
 // Every store notification re-checks store.get().text !== lastRun.text and toggles a muted
@@ -42,6 +55,25 @@
 // call `activeChartRenderer?.()` — T5 only needs to keep setting this same variable from its own
 // chart-bearing tabs for theme re-rendering to keep working, no other plumbing to touch.
 //
+// Review fix (Important) — chart cleanup: every NEW DOM element handed to `plotly.react` MUST be
+// mounted via the `mountChart(el, spec)` helper (defined near `purgeCharts()` below), not a bare
+// `plotly.react(...)` call — it both draws the chart and adds `el` to `chartRegistry` at the same
+// moment `activeChartRenderer` is set (see `renderTraceTab` for the pattern). `renderBody()` calls
+// `purgeCharts()` (which calls `plotly.purge(el)` on every registered element, wrapped in try/catch
+// so one bad purge can't block the rest, then clears the registry) BEFORE `bodyEl.replaceChildren()`
+// — discarding a chart-bearing div without purging it first leaks the Plotly instance's internal
+// listeners/WebGL context; over repeated tab/strategy switches this accumulates hidden
+// `.js-plotly-plot` instances even though only one is ever visible in the DOM. `mountChart` also
+// `.catch()`es the promise `plotly.react` returns — that promise can still be settling when a fast
+// subsequent switch purges this same div before it resolves, and an unhandled rejection from
+// Plotly's own internal continuation touching the now-purged div is a real, verified-live console
+// error otherwise (10x rapid tab/strategy switching reproduced it on every cycle before the catch
+// was added). `activeChartRenderer`'s own in-place `plotly.react(el, ...)` re-render (theme change)
+// reuses the SAME div and must NOT call `mountChart` (that would double-add/double-purge it) — but
+// still needs its own `.catch(() => {})` for the same race, see `renderTraceTab`. T5's chart-bearing
+// tabs must follow the same "new chart -> mountChart(el, spec); in-place re-render -> bare
+// `plotly.react(...).catch(() => {})`" split — `purgeCharts()`/`renderBody()` need no per-tab changes.
+//
 // Extending the tab registry (T5/T6): `TABS` (id + label, tab STRIP only) and `TAB_RENDERERS` (id
 // -> () => void, called with bodyEl already cleared) are the two lists to touch. Add a tab: push
 // onto TABS (grows the strip) and add its renderer to TAB_RENDERERS (replace the tornado/psa/
@@ -54,7 +86,7 @@ import { gate, runBase, traceFor } from './analyses.js';
 import { cea } from '../analysis/cea.js';
 import { readChartTheme, buildTraceSpec } from './charts.js';
 import {
-  formatMoney, format4, formatIcer, statusLabel, formatRunStamp, buildStrategyIndex,
+  formatMoney, format4, formatIcer, statusLabel, formatRunStamp, buildStrategyIndex, parseWtpInput,
 } from './results-format.js';
 
 // ================================================================================================
@@ -102,6 +134,7 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
   let selectedTraceStrategy = null;
   let activeChartRenderer = null; // () => void, re-invoked on a theme change; see module doc above
   let toastTimer = null;
+  const chartRegistry = new Set(); // live chart-bearing DOM elements; see purgeCharts()/module doc
 
   function isMarkovNow() {
     return store.get().model?.type === 'markov';
@@ -126,6 +159,14 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
     return store.get().model?.settings?.wtp ?? 30000;
   }
 
+  // Review fix (Critical): the WTP `<input>`'s own last-known-GOOD numeric value, independent of
+  // `lastRun` — updated by commitWtp/runNow every time the field parses to a real number (never on
+  // a rejected empty/non-numeric edit). Kept separate from `lastRun.wtp` specifically so a value the
+  // user has already typed-and-blurred survives a SECOND bad edit (e.g. clear the field twice in a
+  // row) even before the very first Run happens — falling back to `lastRun?.wtp ?? initialWtp()`
+  // instead would forget that first edit and revert all the way to the model's default.
+  let lastGoodWtp = initialWtp();
+
   const wtpInput = h('input', {
     type: 'number', class: 'res-font-data res-wtp-input', min: '0', step: '1000',
     'aria-label': 'Willingness to pay', value: String(initialWtp()),
@@ -149,8 +190,16 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
   }
 
   function commitWtp() {
-    const n = Number(wtpInput.value);
-    if (!Number.isFinite(n)) return; // ignore an unparseable/empty value; leave the last good wtp
+    // Review fix (Critical): route through parseWtpInput rather than a raw `Number(...)` +
+    // `isFinite` check — `Number('')` is `0`, a perfectly finite number, so the old check let
+    // clearing the field silently commit wtp=0 (NMB would jump on the very next keystroke/blur
+    // cycle, before the user had typed a replacement digit). A trimmed-empty or non-numeric field
+    // now falls back to `lastGoodWtp` instead, and the field itself is written back to whatever
+    // value actually took effect — so a rejected edit visibly snaps back rather than leaving stale
+    // text in the input next to a silently-unchanged in-memory wtp.
+    const n = parseWtpInput(wtpInput.value, lastGoodWtp);
+    lastGoodWtp = n;
+    wtpInput.value = String(n);
     if (!lastRun) return; // nothing to re-derive yet — the value is simply remembered for the next run
     recomputeCea(n);
     if (activeTab === 'cea') renderBody();
@@ -270,10 +319,15 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
     wrap.appendChild(chartEl);
 
     const spec = buildTraceSpec(traceData, readTheme());
-    plotly.react(chartEl, spec.data, spec.layout, spec.config);
+    mountChart(chartEl, spec);
     activeChartRenderer = () => {
       const s2 = buildTraceSpec(traceData, readTheme());
-      plotly.react(chartEl, s2.data, s2.layout, s2.config);
+      // In-place update of the SAME div — not a re-mount, so no chartRegistry.add (would double-add
+      // the same element; purgeCharts() would then try to purge an already-purged div on the second
+      // pass, harmless since it's try/catch'd, but pointless). Same race-swallow as mountChart below:
+      // this render can itself get purged (a tab switch fired right after a theme change) before
+      // Plotly's own promise for it settles.
+      plotly.react(chartEl, s2.data, s2.layout, s2.config).catch(() => {});
     };
 
     wrap.appendChild(buildTraceDetails(traceData));
@@ -296,8 +350,37 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
     validation: renderValidationTab,
   };
 
+  // Review fix (Important): the two-step "mount a NEW chart div" pattern every chart-bearing tab
+  // (Trace here; T5's Tornado/PSA/CE-plane/CEAC/EVPI) must use — `plotly.react(el, ...)` to draw it,
+  // `chartRegistry.add(el)` so `purgeCharts()` can tear it down later. The `.catch(() => {})` on the
+  // react() call is NOT optional: `plotly.react`/`newPlot` return a promise that can still be
+  // settling (Plotly's own internal layout/render pipeline) when a fast subsequent tab/strategy
+  // switch calls `purgeCharts()` on this same div before that promise resolves — Plotly's internal
+  // continuation then throws trying to read state off the now-purged div, surfacing as an "Uncaught
+  // (in promise)" console error despite the purge itself being perfectly correct (verified live:
+  // 10x rapid tab/strategy switching threw this on every cycle before the `.catch` was added, zero
+  // after). An in-place re-render of an ALREADY-mounted div (see `activeChartRenderer`'s own
+  // `plotly.react` call in `renderTraceTab` below) needs the same `.catch` but must NOT call
+  // `mountChart`/re-add the element — it isn't a new chart.
+  function mountChart(el, spec) {
+    plotly.react(el, spec.data, spec.layout, spec.config).catch(() => {});
+    chartRegistry.add(el);
+  }
+
+  // Review fix (Important): purges every registered chart div BEFORE it's discarded. Wrapped
+  // per-element in try/catch so one already-detached/broken chart can't stop the rest from being
+  // purged (and can't throw out of renderBody(), which callers rely on being synchronous/non-
+  // throwing). Always clears the registry after, regardless of any individual purge failure.
+  function purgeCharts() {
+    for (const el of chartRegistry) {
+      try { plotly.purge(el); } catch { /* best-effort cleanup; a failed purge must not block rendering */ }
+    }
+    chartRegistry.clear();
+  }
+
   function renderBody() {
     activeChartRenderer = null; // cleared unless the tab we're about to render sets it (Trace only, this task)
+    purgeCharts(); // review fix (Important): every discarded chart div gets Plotly.purge'd first — see module doc
     bodyEl.replaceChildren();
     TAB_RENDERERS[activeTab]();
   }
@@ -320,8 +403,16 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
 
   function runNow() {
     flush();
-    const { model, text } = store.get();
-    if (!model) { showToast('Fix the YAML error before running.'); return; }
+    const { model, text, parseError } = store.get();
+    // Review fix (Critical): guard on `parseError`, never `!model` — store.js keeps the LAST-GOOD
+    // model in place while a live YAML edit fails to parse, so `model` stays non-null even though
+    // the YAML pane is showing broken, unparsed text. Checking `!model` alone let Run silently
+    // compute fresh results off that stale model, AND captured the broken live text as
+    // `lastRun.text` — which meant the stale-banner's text-inequality check could never fire
+    // afterwards either (the "current" text WAS what got snapshotted). `parseError` is set in
+    // exactly this case (and also covers the `model === null` boot-time case, a subset of it), so
+    // checking it alone is both necessary and sufficient; `lastRun` is left completely untouched.
+    if (parseError) { showToast('Fix the YAML error before running.'); return; }
 
     const g = gate(model);
     if (!g.ok) {
@@ -333,7 +424,12 @@ export function createResults(paneEl, store, { flush = () => {}, plotly, selectO
     }
 
     lastGateErrors = null;
-    const wtp = Number.isFinite(Number(wtpInput.value)) ? Number(wtpInput.value) : initialWtp();
+    // Review fix (Critical): same parseWtpInput guard as commitWtp — a cleared/garbage WTP field
+    // must fall back to lastGoodWtp, never silently run with wtp=0. Also normalizes the field back
+    // to whatever value actually took effect, same as commitWtp.
+    const wtp = parseWtpInput(wtpInput.value, lastGoodWtp);
+    lastGoodWtp = wtp;
+    wtpInput.value = String(wtp);
     const { results, ceaRows, strategies } = runBase(model, { wtp });
     lastRun = { results, ceaRows, strategies, strategyIndex: buildStrategyIndex(strategies), wtp, text, ts: Date.now() };
     selectedTraceStrategy = strategies[0] ?? null;
