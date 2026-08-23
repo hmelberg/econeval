@@ -691,6 +691,9 @@ button:active {
   font-size: var(--fs-1);
   color: var(--muted);
 }
+.res-font-data {
+  font-family: var(--font-data);
+}
 .res-wtp-input {
   width: 100px;
   background: var(--surface);
