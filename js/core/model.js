@@ -11,7 +11,7 @@ export class ModelError extends Error {
 
 const UNITS = { year: 1, month: 1 / 12, week: 7 / 365.25, day: 1 / 365.25 };
 
-function parseCycle(str) {                    // "1 year" | "6 months" | number (years)
+export function parseCycle(str) {              // "1 year" | "6 months" | number (years)
   if (str == null) return 1;
   if (typeof str === 'number') return str;
   const m = /^\s*([\d.]+)\s*(year|month|week|day)s?\s*$/.exec(String(str));

@@ -37,6 +37,12 @@ test('renameState rewrites rows, targets, start, layout', () => {
   assert.throws(() => ops.renameState(m2, 'healthy', 'dead'), /exists/);
 });
 
+test('renameState same-name is a no-op (returns an equal model, does not throw)', () => {
+  const m = M();
+  const m2 = ops.renameState(m, 'well', 'well');
+  assert.deepEqual(m2, m);
+});
+
 test('deleteState scrubs every reference', () => {
   const m2 = ops.deleteState(M(), 'dead');
   assert.ok(!m2.transitions.dead);
