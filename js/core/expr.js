@@ -93,8 +93,12 @@ function evalAst(ast, env) {
 function evalCall(ast, env) {
   const { name, args } = ast;
   if (DIST_NAMES.has(name)) {
-    const d = { name, args: args.map(a => evalAst(a, env)) };
-    return env.mode === 'sample' ? distSample(d, env.rand) : distMean(d);
+    try {
+      const d = { name, args: args.map(a => evalAst(a, env)) };
+      return env.mode === 'sample' ? distSample(d, env.rand) : distMean(d);
+    } catch (e) {
+      throw new ExprError(e.message, ast.pos);
+    }
   }
   switch (name) {
     case 'min': return Math.min(...args.map(a => evalAst(a, env)));

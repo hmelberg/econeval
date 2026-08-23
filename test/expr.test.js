@@ -67,3 +67,12 @@ test('errors carry position; rest rejected here', () => {
   assert.throws(() => compile('rest').eval(env()), /rest/);
   assert.throws(() => compile('foo(1)').eval(env()), /foo/);
 });
+
+test('distribution arity errors are wrapped as ExprError', () => {
+  try { compile('beta(1, 2, 3)').eval(env()); assert.fail('should throw'); }
+  catch (err) {
+    assert.ok(err instanceof ExprError, 'should be ExprError');
+    assert.ok(/argument/i.test(err.message), 'message should mention arguments');
+    assert.equal(typeof err.pos, 'number', 'should have numeric pos');
+  }
+});
