@@ -84,3 +84,37 @@ transitions: {a: {a: 1}}
   assert.ok(varC > 3.2, `variance ${varC} suggests correlation not applied`);
   assert.ok(Math.abs(meanC) < 0.2);
 });
+
+test('correlations: a jointly-impossible correlation matrix throws a structured, path-carrying error', () => {
+  const m = parseModel(`
+econeval: 1
+type: markov
+name: badcorr
+settings:
+  cycles: 1
+  start: s
+  correction: none
+  psa:
+    n: 10
+    seed: 1
+    correlations:
+      - {a: x, b: y, r: 0.9}
+      - {a: y, b: z, r: 0.9}
+      - {a: x, b: z, r: -0.9}
+params:
+  x:
+    dist: normal(0, 1)
+  y:
+    dist: normal(0, 1)
+  z:
+    dist: normal(0, 1)
+states:
+  s: {cost: x + y + z, utility: 1}
+transitions: {s: {s: 1}}
+`);
+  assert.throws(() => psa(m, {}), (err) => {
+    assert.match(err.message, /positive definite/);
+    assert.equal(err.path, 'settings.psa.correlations');
+    return true;
+  });
+});

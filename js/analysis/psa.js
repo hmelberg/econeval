@@ -35,6 +35,18 @@ import { compile } from '../core/expr.js';
 import { makeEnv } from '../engine/resolve.js';
 import { run } from '../engine/run.js';
 
+// User-model-facing PSA errors (a malformed settings.psa.correlations block) carry a `path`,
+// mirroring ModelError/MarkovError — see the two throw sites below. Errors below this point that
+// stay plain `Error` (e.g. inside parseDistCall) are internal/assertion-style: they only fire on
+// a dist spec shape that expr.js's own compile/eval already accepts, so they aren't a distinct
+// user-facing validation surface.
+export class PsaError extends Error {
+  constructor(message, extra = {}) {
+    super(message);
+    Object.assign(this, extra);
+  }
+}
+
 function splitTopLevelArgs(s) {
   const parts = [];
   let depth = 0, start = 0;
@@ -72,8 +84,9 @@ function buildCorrMatrix(names, correlations) {
   return R;
 }
 
-// Cholesky decomposition R = L·Lᵀ (R symmetric). Throws if R is not positive definite (a
-// non-positive pivot on the diagonal) — e.g. inconsistent correlations among the listed params.
+// Cholesky decomposition R = L·Lᵀ (R symmetric). Throws (PsaError, user-facing: a malformed
+// settings.psa.correlations block) if R is not positive definite (a non-positive pivot on the
+// diagonal) — e.g. inconsistent correlations among the listed params.
 function cholesky(R) {
   const k = R.length;
   const L = Array.from({ length: k }, () => new Array(k).fill(0));
@@ -83,9 +96,10 @@ function cholesky(R) {
       for (let m = 0; m < j; m++) sum -= L[i][m] * L[j][m];
       if (i === j) {
         if (sum <= 0)
-          throw new Error(
-            `psa: settings.psa.correlations is not positive definite (row ${i}) — check for ` +
-            `inconsistent correlation coefficients among the listed params`
+          throw new PsaError(
+            `settings.psa.correlations: correlation matrix is not positive definite (row ${i}) — ` +
+            `check for inconsistent correlation coefficients among the listed params`,
+            { path: 'settings.psa.correlations' }
           );
         L[i][j] = Math.sqrt(sum);
       } else {
@@ -115,7 +129,10 @@ export function psa(model, opts = {}) {
   for (const { a, b } of correlations) { corrNameSet.add(a); corrNameSet.add(b); }
   for (const name of corrNameSet) {
     if (!distNameSet.has(name))
-      throw new Error(`psa: settings.psa.correlations references '${name}', which has no 'dist:' in params`);
+      throw new PsaError(
+        `settings.psa.correlations references '${name}', which has no 'dist:' in params`,
+        { path: 'settings.psa.correlations' }
+      );
   }
   // Same declaration order as distParamNames, so the copula's index order is deterministic.
   const corrNames = distParamNames.filter((name) => corrNameSet.has(name));
