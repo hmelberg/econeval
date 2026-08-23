@@ -1,4 +1,4 @@
-import { load } from 'js-yaml';
+import { load, dump } from 'js-yaml';
 
 export class ModelError extends Error {
   constructor(message, { line, hint, path } = {}) {
@@ -144,17 +144,181 @@ const KNOWN_TOP = new Set([
   'states', 'transitions', 'strategies', 'tree', 'layout',
 ]);
 
-export function normalizeModel(obj) {
+// Same set, but named for the JS-side Model object fields (note `version` vs raw `econeval`) —
+// used by serializeModel to spread back any unrecognized extra fields (e.g. `description`).
+const MODEL_FIELD_KEYS = new Set([
+  'version', 'type', 'name', 'meta', 'settings', 'params', 'tables', 'models',
+  'states', 'transitions', 'strategies', 'tree', 'layout',
+]);
+
+// --- tree ---
+//
+// Reserved node keys: p, cost, utility, source, notes, children, model, with, delay, kind.
+// `cost`/`utility` fold into the node's `payoffs` (same bucket as any non-reserved scalar
+// extra, e.g. `relapses: 1`) — the Node shape has no separate cost/utility slots. `p`, `model`,
+// `with`, `delay`, `source`, `notes` become direct Node fields. `children` is the explicit
+// fallback for inline children (merged with any inline `Name: {...}` siblings; a name appearing
+// in both is an error). `kind` is an internal-only parser override (root=decision, has-p=chance,
+// leaf=terminal are always inferred) — consumed and discarded, never surfaced on the Node.
+//
+// Any other *mapping*-valued key is a child node; any other *scalar*-valued key is an extra
+// tracked payoff.
+
+function normTreeWith(raw, path) {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw))
+    throw new ModelError(`${path}.with: must be a mapping`, { path: `${path}.with` });
+  return { ...raw };
+}
+
+function normTreeNode(name, raw, path) {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw))
+    throw new ModelError(`${path}.${name}: tree node must be a mapping`, { path: `${path}.${name}` });
+
+  const node = { name };
+  const payoffs = {};
+  const inlineChildren = [];
+  let explicitChildrenRaw;
+
+  for (const [k, v] of Object.entries(raw)) {
+    switch (k) {
+      case 'children':
+        explicitChildrenRaw = v;
+        break;
+      case 'kind':
+        break; // internal-only parser override; not surfaced on the Node
+      case 'p':
+        node.p = v;
+        break;
+      case 'model':
+        if (typeof v !== 'string')
+          throw new ModelError(`${path}.${name}.model: must be a string (sub-model name)`, { path: `${path}.${name}.model` });
+        node.model = v;
+        break;
+      case 'with':
+        node.with = normTreeWith(v, `${path}.${name}`);
+        break;
+      case 'delay':
+        node.delay = parseCycle(v);
+        break;
+      case 'source':
+        node.source = v;
+        break;
+      case 'notes':
+        node.notes = v;
+        break;
+      case 'cost':
+      case 'utility':
+        payoffs[k] = v;
+        break;
+      default:
+        if (typeof v === 'object' && v !== null && !Array.isArray(v)) {
+          inlineChildren.push([k, v]);
+        } else if (typeof v === 'number' || typeof v === 'string') {
+          payoffs[k] = v;
+        } else {
+          throw new ModelError(`${path}.${name}.${k}: invalid tree node value`, { path: `${path}.${name}.${k}` });
+        }
+    }
+  }
+
+  node.payoffs = payoffs;
+
+  const childEntries = [...inlineChildren];
+  if (explicitChildrenRaw !== undefined) {
+    if (typeof explicitChildrenRaw !== 'object' || explicitChildrenRaw === null || Array.isArray(explicitChildrenRaw))
+      throw new ModelError(`${path}.${name}.children: must be a mapping`, { path: `${path}.${name}.children` });
+    for (const [cname, cval] of Object.entries(explicitChildrenRaw)) {
+      if (childEntries.some(([existing]) => existing === cname))
+        throw new ModelError(
+          `${path}.${name}: child '${cname}' appears both inline and in 'children:' — ambiguous`,
+          { path: `${path}.${name}` }
+        );
+      // An explicit children: entry can name-collide with a payoff extra declared directly on
+      // this node (inline children can't — a single raw key can't be both scalar and mapping).
+      // Serializing would otherwise silently drop the payoff (the child overwrites it in the
+      // plain object) — surface it instead of losing data silently.
+      if (Object.prototype.hasOwnProperty.call(payoffs, cname))
+        throw new ModelError(
+          `${path}.${name}: child '${cname}' (in 'children:') collides with a payoff of the same name — rename one`,
+          { path: `${path}.${name}` }
+        );
+      childEntries.push([cname, cval]);
+    }
+  }
+
+  node.children = childEntries.map(([cname, cval]) => normTreeNode(cname, cval, `${path}.${name}`));
+
+  return node;
+}
+
+// tree: { rootName: {...} } — exactly one top-level key naming the root (decision) node.
+function normTree(raw) {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw))
+    throw new ModelError('tree: must be a mapping with a single root node', { path: 'tree' });
+  const keys = Object.keys(raw);
+  if (keys.length !== 1)
+    throw new ModelError('tree: must have exactly one root node', { path: 'tree' });
+  const [rootName] = keys;
+  return normTreeNode(rootName, raw[rootName], 'tree');
+}
+
+// --- sub-models (models:) ---
+//
+// Each entry runs through the same normalizeModel, in sub-model context: `type` defaults to
+// 'markov' if the entry has `states`, 'tree' if it has `tree` (only when `type` is omitted);
+// `econeval`/`name` are not required (name falls back to the models: key); discount/wtp/psa in
+// `settings` are top-level-only and become a ModelError if present in a sub-model.
+
+function inferSubModelType(sub, name) {
+  if (sub.type !== undefined) return sub.type;
+  if (sub.states !== undefined) return 'markov';
+  if (sub.tree !== undefined) return 'tree';
+  throw new ModelError(
+    `models.${name}: cannot infer 'type' — provide 'type:' or one of 'states:'/'tree:'`,
+    { path: `models.${name}.type` }
+  );
+}
+
+function normModels(raw) {
+  const out = {};
+  if (raw === undefined) return out;
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw))
+    throw new ModelError('models: must be a mapping of name to sub-model', { path: 'models' });
+  for (const [name, sub] of Object.entries(raw)) {
+    if (typeof sub !== 'object' || sub === null || Array.isArray(sub))
+      throw new ModelError(`models.${name}: must be a mapping`, { path: `models.${name}` });
+    const type = inferSubModelType(sub, name);
+    const subObj = sub.type === undefined ? { ...sub, type } : sub;
+    try {
+      out[name] = normalizeModel(subObj, { subModel: true, defaultName: name });
+    } catch (e) {
+      if (e instanceof ModelError) {
+        throw new ModelError(`models.${name}: ${e.message}`, {
+          line: e.line,
+          hint: e.hint,
+          path: e.path ? `models.${name}.${e.path}` : `models.${name}`,
+        });
+      }
+      throw e;
+    }
+  }
+  return out;
+}
+
+export function normalizeModel(obj, { subModel = false, defaultName } = {}) {
   if (typeof obj !== 'object' || obj === null || Array.isArray(obj))
     throw new ModelError('model must be a YAML mapping at the top level');
 
-  if (obj.econeval === undefined)
+  // `subModel: true` relaxes econeval/name requirements (a sub-model is embedded, not a
+  // standalone document) and forbids the top-level-only settings (discount/wtp/psa).
+  if (obj.econeval === undefined && !subModel)
     throw new ModelError("econeval: version key is required (e.g. 'econeval: 1')", { path: 'econeval' });
   const version = obj.econeval;
 
-  if (typeof obj.name !== 'string' || obj.name.length === 0)
-    throw new ModelError('name: a non-empty model name is required', { path: 'name' });
-  const name = obj.name;
+  let name;
+  if (typeof obj.name === 'string' && obj.name.length > 0) name = obj.name;
+  else if (subModel && defaultName) name = defaultName;
+  else throw new ModelError('name: a non-empty model name is required', { path: 'name' });
 
   const type = obj.type;
   if (!KNOWN_TYPES.has(type))
@@ -166,6 +330,17 @@ export function normalizeModel(obj) {
   const rawSettings = obj.settings ?? {};
   if (typeof rawSettings !== 'object' || rawSettings === null || Array.isArray(rawSettings))
     throw new ModelError('settings: must be a mapping', { path: 'settings' });
+
+  if (subModel) {
+    for (const k of ['discount', 'wtp', 'psa']) {
+      if (Object.prototype.hasOwnProperty.call(rawSettings, k))
+        throw new ModelError(
+          `settings.${k}: is a top-level-only setting (discount/wtp/psa apply once, at the top ` +
+          `level) — not allowed inside a sub-model`,
+          { path: `settings.${k}` }
+        );
+    }
+  }
 
   if (type === 'markov') {
     const c = rawSettings.cycles;
@@ -243,11 +418,22 @@ export function normalizeModel(obj) {
 
   const tables = normTables(obj.tables);
 
+  // --- tree (tree type only) ---
+  let tree = null;
+  if (type === 'tree') {
+    if (obj.tree === undefined)
+      throw new ModelError('tree: required for tree models', { path: 'tree' });
+    tree = normTree(obj.tree);
+  }
+
+  // --- sub-models: each entry runs through this same normalizer (subModel context) ---
+  const models = normModels(obj.models);
+
   const model = {
     version, type, name, meta, settings, params, tables,
-    models: {},   // filled in Task 6
+    models,
     states, transitions, strategies,
-    tree: null,   // filled in Task 6
+    tree,
     layout: obj.layout ?? null,
   };
 
@@ -271,4 +457,140 @@ export function parseModel(text) {
     throw new ModelError(`YAML error: ${e.reason ?? e.message}`, { line, hint });
   }
   return normalizeModel(obj);
+}
+
+// --- serializeModel: build a plain object mirroring the INPUT format from a normalized Model,
+// then yaml.dump it. Every collapsing rule below is the exact inverse of a normalizeModel
+// expansion, so parseModel(serializeModel(m)) always reproduces the same normalized Model —
+// even where the plain object doesn't textually match what a human originally typed (e.g. a
+// `start: well` shorthand and an explicit `start: {well: 1}` both normalize identically, so
+// either serialization is round-trip-safe; we always emit the shorthand where one exists).
+
+function collapseStart(startObj) {
+  const keys = Object.keys(startObj);
+  if (keys.length === 1 && startObj[keys[0]] === 1) return keys[0];
+  return { ...startObj };
+}
+
+function settingsToPlain(s) {
+  const out = {};
+  if (s.cycles !== undefined) out.cycles = s.cycles;
+  if (s.cycleYears !== 1) out.cycle = `${s.cycleYears} year`;
+  if (s.discount.cost !== 0 || s.discount.effect !== 0) out.discount = { ...s.discount };
+  if (s.correction !== 'half-cycle') out.correction = s.correction;
+  if (s.wtp !== null) out.wtp = s.wtp;
+  if (s.psa.n !== 1000 || s.psa.seed !== 1 || (s.psa.correlations?.length ?? 0) > 0) {
+    out.psa = { n: s.psa.n, seed: s.psa.seed };
+    if ((s.psa.correlations?.length ?? 0) > 0) out.psa.correlations = s.psa.correlations;
+  }
+  if (s.start !== null) out.start = collapseStart(s.start);
+  if (s.age !== null) out.age = s.age;
+  return out;
+}
+
+// {value: x} alone -> bare x; anything with low/high/dist/source/notes stays a mapping.
+function paramsToPlain(paramsMap) {
+  const out = {};
+  for (const [pname, p] of paramsMap) {
+    const keys = Object.keys(p);
+    out[pname] = (keys.length === 1 && keys[0] === 'value') ? p.value : { ...p };
+  }
+  return out;
+}
+
+function statesToPlain(states) {
+  const out = {};
+  for (const st of states) {
+    const entry = { ...st.payoffs };
+    if (st.source !== undefined) entry.source = st.source;
+    if (st.notes !== undefined) entry.notes = st.notes;
+    out[st.name] = entry;
+  }
+  return out;
+}
+
+function transitionsToPlain(transitions) {
+  const out = {};
+  for (const [from, row] of Object.entries(transitions)) {
+    if (row.type === 'multinomial') {
+      out[from] = { multinomial: { ...row.counts } };
+      continue;
+    }
+    const rowOut = {};
+    for (const [target, entry] of Object.entries(row.to)) {
+      const keys = Object.keys(entry);
+      rowOut[target] = (keys.length === 1 && keys[0] === 'p') ? entry.p : { ...entry };
+    }
+    out[from] = rowOut;
+  }
+  return out;
+}
+
+// {base: {overrides: {}}} alone (the implicit default) is omitted entirely.
+function strategiesToPlain(strategies) {
+  const names = Object.keys(strategies);
+  if (names.length === 1 && names[0] === 'base' && Object.keys(strategies.base.overrides).length === 0)
+    return undefined;
+  const out = {};
+  for (const [sname, s] of Object.entries(strategies)) out[sname] = { ...s.overrides };
+  return out;
+}
+
+function treeNodeToPlain(node) {
+  const out = {};
+  if (node.p !== undefined) out.p = node.p;
+  if (node.model !== undefined) out.model = node.model;
+  if (node.with !== undefined) out.with = { ...node.with };
+  if (node.delay !== undefined) out.delay = `${node.delay} year`;
+  if (node.source !== undefined) out.source = node.source;
+  if (node.notes !== undefined) out.notes = node.notes;
+  Object.assign(out, node.payoffs);
+  for (const child of node.children) out[child.name] = treeNodeToPlain(child);
+  return out;
+}
+
+function modelToPlain(model) {
+  const plain = {};
+  if (model.version !== undefined) plain.econeval = model.version;
+  plain.type = model.type;
+  plain.name = model.name;
+  if (model.meta && Object.keys(model.meta).length > 0) plain.meta = model.meta;
+
+  const settingsPlain = settingsToPlain(model.settings);
+  if (Object.keys(settingsPlain).length > 0) plain.settings = settingsPlain;
+
+  if (model.params.size > 0) plain.params = paramsToPlain(model.params);
+  if (model.tables && Object.keys(model.tables).length > 0) plain.tables = model.tables;
+
+  if (model.models && Object.keys(model.models).length > 0) {
+    const modelsPlain = {};
+    for (const [mname, sub] of Object.entries(model.models)) modelsPlain[mname] = modelToPlain(sub);
+    plain.models = modelsPlain;
+  }
+
+  if (model.type === 'markov') {
+    if (model.states.length > 0) plain.states = statesToPlain(model.states);
+    if (Object.keys(model.transitions).length > 0) plain.transitions = transitionsToPlain(model.transitions);
+  }
+
+  const strategiesPlain = strategiesToPlain(model.strategies);
+  if (strategiesPlain !== undefined) plain.strategies = strategiesPlain;
+
+  if (model.type === 'tree' && model.tree) plain.tree = { [model.tree.name]: treeNodeToPlain(model.tree) };
+
+  if (model.layout !== null) plain.layout = model.layout;
+
+  // Unrecognized extra fields (e.g. `description`, spread onto the model by normalizeModel).
+  for (const k of Object.keys(model)) {
+    if (!MODEL_FIELD_KEYS.has(k)) plain[k] = model[k];
+  }
+
+  return plain;
+}
+
+// yaml.dump with flowLevel:-1 guarantees block style everywhere, so a value containing '(' (a
+// distribution call like `beta(202, 798)`) never lands inside a flow mapping `{...}` — the one
+// place a bare comma inside the parens would be misparsed as a second field.
+export function serializeModel(model) {
+  return dump(modelToPlain(model), { flowLevel: -1, lineWidth: 120 });
 }
