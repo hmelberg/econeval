@@ -121,36 +121,28 @@
   color: var(--muted);
 }
 
-/* ---------- Tool cursors (Task 10) ---------- */
-
-/* Add tool: markov click-anywhere adds a state, so the whole canvas hints "place something
-   here". On a tree, only clicking an existing node adds a child (empty space is a no-op) — so
-   the crosshair is scoped to nodes only, per the brief. */
-#canvas[data-tool="add"] {
-  cursor: crosshair;
+/* ---------- Drag ghosts (Task 5 — modeless gestures; decide-at-drop) ----------
+   The real node never moves during a drag — a translucent clone follows the cursor instead, so
+   switching between the move reading and the connect reading is a crossfade between two overlays
+   rather than the node snapping back to where it started. */
+#canvas .drag-ghost {
+  opacity: .45;
+  pointer-events: none;
 }
-#canvas[data-tool="add"][data-model-type="tree"] {
-  cursor: default;
-}
-#canvas[data-tool="add"][data-model-type="tree"] .node {
-  cursor: crosshair;
-}
-#canvas[data-tool="connect"] .node {
-  cursor: crosshair;
-}
-#canvas[data-tool="delete"] .node,
-#canvas[data-tool="delete"] .edge {
-  cursor: not-allowed;
-}
-
-/* ---------- Ghost edge (Connect tool drag preview) ---------- */
-
 #canvas .ghost-edge {
   fill: none;
   stroke: var(--accent);
   stroke-width: 1.5;
   stroke-dasharray: 4 3;
   pointer-events: none;
+}
+#canvas .drop-ring {
+  outline: none;
+  stroke: var(--accent);
+}
+#canvas .drop-ring .node-shape {
+  stroke: var(--accent);
+  stroke-width: 3;
 }
 
 /* ---------- Inline rename (foreignObject over a node) ---------- */

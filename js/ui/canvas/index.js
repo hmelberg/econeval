@@ -1,37 +1,34 @@
 // SVG canvas renderer for econeval models.
 //
-// Two halves, per constraints.md ("DOM modules ... hold no business logic"):
+// Four pieces now, per constraints.md ("DOM modules ... hold no business logic") and the design
+// spec's §5 module split:
 //   1. Pure geometry (canvas/geometry.js, covered by test/canvas-geometry.test.js): geometry
 //      helpers, shape descriptors, hit-testing, snap-to-grid, fit-box. None touch DOM.
 //   2. DOM building (canvas/render.js): buildSvg(svgEl, model, {positions, selection, handlers})
 //      constructs the <g> tree of nodes/edges and wires their pointerdown listeners to call back
 //      into the `handlers` this module passes in — it never touches the store or applies an op.
-// This file (createCanvas(svgEl, store, {layoutFor, flush})) is the third piece (Task 4 split it
-// out of the old js/ui/canvas.js, which combined all three): store/selection resolution, the
-// pointer-gesture state machine (pan / node drag-to-move / connect drag), the toolbar, inline
-// rename, keyboard shortcuts and the toast strip. Reads store.get().model (or, once a sub-model
-// has been entered, model.models[name] via the same currentModelPath chase), positions nodes via
-// the injected layoutFor, and re-renders in full on every store.subscribe notification (no vDOM —
-// fine at this scale, per the brief).
+//   3. The gesture state machine (canvas/gestures.js, Task 5): pan / node move / node connect /
+//      click-select / double-click-create, all resolved from ONE pointer gesture captured on
+//      svgEl, decided at drop time rather than by a globally-selected tool. Owns the Space latch.
+// This file (createCanvas(svgEl, store, {layoutFor, flush})) is the fourth piece: store/selection
+// resolution, scope/breadcrumb, the view (pan/zoom state), inline rename, keyboard shortcuts
+// (Escape/Delete/Backspace) and the toast strip — wiring gestures.js's callbacks to the store and
+// passing its `handlers` straight into buildSvg. Reads store.get().model (or, once a sub-model has
+// been entered, model.models[name] via the same currentModelPath chase), positions nodes via the
+// injected layoutFor, and re-renders in full on every store.subscribe notification (no vDOM — fine
+// at this scale, per the brief).
 //
 // Scope: Task 9 delivered render + click-to-select + double-click-to-enter-a-sub-model + pan/zoom.
-// Task 10 added the editing gestures: a 4-tool toolbar (Select/Add/Connect/Delete, appended into
-// #canvas-toolbar — panels.js's maximize button already lives there, never replaced), node
-// drag-to-move (live preview + one setLayout op on release), inline foreignObject rename, Add/
-// Connect/Delete tool click & drag gestures, a transient toast strip for op errors, and the
-// store's optional {flush} callback (Task 12 passes sync.flush — see the controller ruling below).
-// Task 4 split the file in two (this module + render.js) and replaced the old scalar `hitR` with
-// `hit` shape descriptors from geometry.hitShapeFor, so every node/edge gets a real hit area
-// instead of a uniform circle (or, for edges, only the painted 1.5px stroke) — setTool/the toolbar
-// itself are unchanged here and are deleted in Task 5.
+// Task 10 added editing via a 4-tool toolbar (Select/Add/Connect/Delete) and Task 4 split the file
+// in two (this module + render.js), replacing the old scalar `hitR` with `hit` shape descriptors
+// from geometry.hitShapeFor. Task 5 deleted the toolbar entirely (modes were friction — see the
+// design spec's "What and why") and moved the gesture logic into canvas/gestures.js.
 
-import {
-  addState, renameState, deleteState, addTransition, deleteTransition, setLayout,
-  addChild, renameNode, deleteNode,
-} from '../ops.js';
+import { renameState, deleteState, deleteTransition, renameNode, deleteNode } from '../ops.js';
 
-import { BASE_W, BASE_H, edgePath, pickNode } from './geometry.js';
-import { el, buildSvg, treeTrimRadius } from './render.js';
+import { BASE_W, BASE_H } from './geometry.js';
+import { el, buildSvg } from './render.js';
+import { createGestures } from './gestures.js';
 
 import { scopedStoreFor } from '../scoped-store.js';
 
@@ -55,23 +52,17 @@ function clamp(v, lo, hi) {
 //     rename-commit handler (the two op-producing gestures that don't begin with a pointerdown).
 export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
   const breadcrumbEl = typeof document !== 'undefined' ? document.getElementById('breadcrumb') : null;
-  const toolbarEl = typeof document !== 'undefined' ? document.getElementById('canvas-toolbar') : null;
   const toastEl = typeof document !== 'undefined' ? document.getElementById('canvas-toast') : null;
 
-  let tool = 'select';
   const currentModelPath = []; // names into .models, chained; [] = the top-level model itself
 
   const view = { x: 0, y: 0, w: BASE_W, h: BASE_H };
   let zoom = 1;
-  let gesture = null;       // the in-flight pointer gesture (pan / node move / connect drag), or null
   let nodeIndex = [];       // rebuilt every render (buildSvg's return value): [{kind, key|path, xy,
-                             // hit, el, ...}] — used for hit-testing (Connect-tool drop target) and
-                             // for re-resolving a node's CURRENT element/position at gesture-start
-                             // (after flush() may have re-rendered) rather than trusting a stale
-                             // closure reference.
-  let lastDown = null;      // { kind, key|path, time } — for hand-rolled double-click detection
-                             // (self-timed rather than relying on native dblclick synthesis, which
-                             // interacts unpredictably with pointer capture; see task-10 report)
+                             // hit, el, ...}] — used for hit-testing (drop-target resolution, via
+                             // gestures.js's getNodeIndex callback) and for re-resolving a node's
+                             // CURRENT element/position at gesture-start (after flush() may have
+                             // re-rendered) rather than trusting a stale closure reference.
   let activeRename = null;  // { fo, input, target, currentName } while an inline rename is open
   let toastTimer = null;
 
@@ -79,7 +70,6 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
     svgEl.setAttribute('viewBox', `${view.x} ${view.y} ${view.w} ${view.h}`);
   }
   applyViewBox();
-  svgEl.setAttribute('data-tool', tool);
 
   // -------- model/store resolution for the currently-entered scope --------
 
@@ -109,10 +99,10 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
 
   // Item 4 (final-review, Validation click-through): jumps the canvas straight to the scope a
   // finding's modelPath names — the same currentModelPath + render() the breadcrumb pop-to and the
-  // double-click sub-model drill-in (handleNodeDoubleClick, below) already use, just settable to an
-  // arbitrary depth in one call instead of one level at a time. app.js's selectOnCanvas calls this
-  // BEFORE store.select(sel), so the halo-matching sameModelPath check above sees the right scope
-  // by the time the resulting store notification re-renders.
+  // double-click sub-model drill-in (enterSubModel, below, called from gestures.js) already use,
+  // just settable to an arbitrary depth in one call instead of one level at a time. app.js's
+  // selectOnCanvas calls this BEFORE store.select(sel), so the halo-matching sameModelPath check
+  // above sees the right scope by the time the resulting store notification re-renders.
   function openScope(modelPath) {
     const path = modelPath ?? [];
     if (sameModelPath(currentModelPath, path)) return;
@@ -178,62 +168,13 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
     });
   }
 
-  // -------- toolbar (Select/Add/Connect/Delete — appended into #canvas-toolbar; panels.js's own
-  // maximize button already lives there and is never touched/replaced) --------
-
-  const TOOL_DEFS = [
-    { name: 'select', glyph: '↖', label: 'Select', key: 'V' },   // north-west arrow (pointer)
-    { name: 'add', glyph: '+', label: 'Add', key: 'A' },
-    { name: 'connect', glyph: '→', label: 'Connect', key: 'C' }, // rightwards arrow
-    { name: 'delete', glyph: '✕', label: 'Delete', key: 'D' },   // multiplication x
-  ];
-  const toolButtons = {};
-  if (toolbarEl) {
-    for (const def of TOOL_DEFS) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.id = `tool-${def.name}`;
-      btn.textContent = def.glyph;
-      btn.setAttribute('aria-label', def.label);
-      btn.setAttribute('aria-pressed', String(def.name === tool));
-      btn.title = `${def.label} (${def.key})`;
-      btn.addEventListener('click', () => setTool(def.name));
-      toolbarEl.appendChild(btn);
-      toolButtons[def.name] = btn;
-    }
-  }
-
-  function updateToolButtons() {
-    for (const name of Object.keys(toolButtons)) {
-      toolButtons[name].setAttribute('aria-pressed', String(tool === name));
-    }
-  }
-
-  function cancelGesture() {
-    if (!gesture) return;
-    if (gesture.ghostEl) { try { gesture.ghostEl.remove(); } catch { /* already detached */ } }
-    try { svgEl.releasePointerCapture(gesture.pointerId); } catch { /* already released */ }
-    gesture = null;
-    render(); // discard any live-preview transform by re-rendering from the model's real layout
-  }
-
-  function setTool(t) {
-    if (tool === t) return;
-    cancelGesture();
-    cancelRename();
-    tool = t;
-    svgEl.setAttribute('data-tool', tool);
-    updateToolButtons();
-  }
+  // -------- escape: cancel rename / cancel gesture / clear selection (Task 5 — the toolbar and
+  // its 'select' tool are gone, so Escape's job shrinks to exactly these three, in order) --------
 
   function escapeAll() {
     cancelRename();
-    cancelGesture();
-    if (tool !== 'select') {
-      tool = 'select';
-      svgEl.setAttribute('data-tool', tool);
-      updateToolButtons();
-    }
+    gestures.cancelGesture();
+    selectTarget(null);
   }
 
   // -------- keyboard shortcuts (global; ignored while typing in an input/textarea/foreignObject
@@ -270,13 +211,8 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
       if (document.querySelector('dialog[open]')) return;
       if (isTypingTarget(e.target)) return;
       if (e.key === 'Escape') { e.preventDefault(); escapeAll(); return; }
-      if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelection(); return; }
-      if (e.metaKey || e.ctrlKey || e.altKey) return; // don't hijack browser/OS chords
-      const k = e.key.toLowerCase();
-      if (k === 'v') { e.preventDefault(); setTool('select'); }
-      else if (k === 'a') { e.preventDefault(); setTool('add'); }
-      else if (k === 'c') { e.preventDefault(); setTool('connect'); }
-      else if (k === 'd') { e.preventDefault(); setTool('delete'); }
+      if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelection(); }
+      // Task 5 removed the V/A/C/D tool-switch arm here — the toolbar it drove no longer exists.
     });
   }
 
@@ -335,39 +271,45 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
     input.addEventListener('blur', () => { if (activeRename) commitRename(); });
   }
 
-  // -------- node/edge identity / double-click detection / handlers passed into buildSvg --------
+  // -------- gesture callbacks: selection, sub-model entry, scoped selection lookup, pan --------
+  // These are the pieces of gesture behaviour that genuinely belong to index.js (they touch the
+  // store, currentModelPath or the view) and are handed to gestures.js as callbacks — see
+  // createGestures's call below. Node/edge pointerdown routing, double-click detection, the drag
+  // preview and the Space latch all live in canvas/gestures.js now (Task 5).
 
-  const DOUBLE_CLICK_MS = 400;
-
-  function sameNodeId(a, b) {
-    if (a.kind !== b.kind) return false;
-    return a.kind === 'state' ? a.key === b.key : arraysEqual(a.path, b.path);
-  }
-
-  function handleNodeDoubleClick(target) {
-    if (target.kind === 'node' && target.treeKind === 'submodel') {
-      currentModelPath.push(target.node.model);
-      render();
+  function selectTarget(target) {
+    const activeStore = scopedStoreFor(store, currentModelPath);
+    if (!target) { activeStore.select({ kind: null, id: null }); return; }
+    if (target.kind === 'state') { activeStore.select({ kind: 'state', id: target.key }); return; }
+    if (target.kind === 'node') { activeStore.select({ kind: 'node', id: target.path }); return; }
+    if (target.variant === 'markov') {
+      activeStore.select({ kind: 'edge', id: { from: target.from, to: target.to } });
       return;
     }
-    if (tool !== 'select') return;
-    startRename(target);
+    activeStore.select({ kind: 'node', id: target.path }); // a tree "edge" IS its child node
   }
 
-  function handleNodePointerDown(e, id) {
-    flush(); // controller ruling: sync any pending debounced YAML edit before this gesture starts
-    const fresh = nodeIndex.find((n) => sameNodeId(n, id));
-    if (!fresh) return; // vanished under us (e.g. the flush() above triggered an edit that removed it)
-    const now = Date.now();
-    const isDbl = !!(lastDown && sameNodeId(lastDown, id) && (now - lastDown.time) < DOUBLE_CLICK_MS);
-    lastDown = isDbl ? null : { ...id, time: now };
-    if (isDbl) { handleNodeDoubleClick(fresh); return; }
-    startGesture(e, { domKind: 'node', ...fresh });
+  function enterSubModel(target) {
+    currentModelPath.push(target.node.model);
+    render();
   }
 
-  function handleEdgePointerDown(e, target) {
-    flush(); // controller ruling: sync any pending debounced YAML edit before this gesture starts
-    startGesture(e, { domKind: 'edge', ...target });
+  // The selection filtered to the scope the canvas is CURRENTLY showing (controller ruling — a
+  // selection made inside a different sub-model, or at the top level while drilled into one, does
+  // not count here): used both by render()'s halo and by gestures.js's background-double-click
+  // create (a tree needs a selected node in THIS scope to parent onto).
+  function scopedSelection() {
+    const raw = store.get().selection;
+    return sameModelPath(raw?.modelPath, currentModelPath) ? raw : null;
+  }
+
+  function panBy(dxPx, dyPx) {
+    const rect = svgEl.getBoundingClientRect();
+    const scaleX = rect.width ? view.w / rect.width : 1;
+    const scaleY = rect.height ? view.h / rect.height : 1;
+    view.x -= dxPx * scaleX;
+    view.y -= dyPx * scaleY;
+    applyViewBox();
   }
 
   // -------- top-level render (delegates DOM construction to render.js's buildSvg) --------
@@ -390,29 +332,15 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
     cancelRename(); // buildSvg rebuilds the whole svg subtree; tear down any open rename first —
                      // DOM cleanup that belongs here, not in render.js's pure DOM-construction.
     const positions = layoutFor(model);
-    // A selection only renders a halo when its modelPath matches the scope on screen right now
-    // (controller ruling — see sameModelPath above): a selection made inside a different
-    // sub-model, or at the top level while we're drilled into one, must not paint here.
-    const rawSelection = store.get().selection;
-    const selection = sameModelPath(rawSelection?.modelPath, currentModelPath) ? rawSelection : null;
     nodeIndex = buildSvg(svgEl, model, {
       positions,
-      selection,
-      handlers: { onNodePointerDown: handleNodePointerDown, onEdgePointerDown: handleEdgePointerDown },
+      selection: scopedSelection(),
+      handlers: gestures.handlers,
     });
   }
 
-  // -------- pan / node-move / connect-drag (one unified pointer gesture) + wheel zoom to cursor --------
-  //
-  // Every pointer gesture (background pan, node drag-to-move, Connect-tool drag) is captured on
-  // svgEl itself (never on the individual node/edge, even though it's a node's own pointerdown
-  // that STARTS a node-move/connect gesture — see startGesture) so that pointermove/pointerup
-  // keep firing reliably even if the pointer leaves the node's small hit area mid-drag. Because
-  // capture is always on svgEl, e.target on pointerup is svgEl regardless of what's visually
-  // under the cursor — so the Connect tool's drop target is found via GEOMETRY hit-testing
-  // (geometry.pickNode) against nodeIndex, never via e.target. This also sidesteps every ambiguity
-  // around native click/dblclick synthesis interacting with pointer capture: nothing in this file
-  // relies on a native 'click' or 'dblclick' event anywhere.
+  // -------- wheel zoom to cursor (Task 5 leaves this unchanged; Task 6 flips wheel to pan and
+  // moves zoom behind ctrl/meta+wheel) --------
 
   function clientToUser(clientX, clientY) {
     if (typeof svgEl.createSVGPoint !== 'function' || typeof svgEl.getScreenCTM !== 'function') {
@@ -427,161 +355,25 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
     return { x: p.x, y: p.y };
   }
 
-  function startGesture(e, target) {
-    gesture = {
-      target,
-      startClientX: e.clientX,
-      startClientY: e.clientY,
-      startViewX: view.x,
-      startViewY: view.y,
-      moved: false,
-      pointerId: e.pointerId,
-    };
-    if (tool === 'connect' && target.domKind === 'node') {
-      gesture.ghostEl = el('path', { class: 'ghost-edge', d: edgePath(target.xy, target.xy, 0) });
-      svgEl.appendChild(gesture.ghostEl);
-    }
-    try { svgEl.setPointerCapture(e.pointerId); } catch { /* not supported in this environment */ }
-  }
-
-  function moveNodeEnd(activeStore, target, cur) {
-    const key = target.kind === 'state' ? target.key : target.path.join('/'); // layout-key rule
-    const xy = [Math.round(cur.x), Math.round(cur.y)];
-    runOp(activeStore, (m) => setLayout(m, key, xy));
-  }
-
-  function addOnBackground(activeStore, cur) {
-    const model = activeStore.get().model;
-    if (!model || model.type !== 'markov') return; // tree: empty-space click is a no-op (brief)
-    runOp(activeStore, (m) => {
-      const m1 = addState(m);
-      const added = m1.states[m1.states.length - 1]; // addState always pushes the new state last
-      return setLayout(m1, added.name, [Math.round(cur.x), Math.round(cur.y)]);
-    });
-  }
-
-  function addOnNode(activeStore, target) {
-    const model = activeStore.get().model;
-    if (!model || model.type !== 'tree' || target.kind !== 'node') return; // markov node click: no-op
-    runOp(activeStore, (m) => addChild(m, target.path));
-  }
-
-  function connectDrop(activeStore, fromTarget, cur) {
-    const model = activeStore.get().model;
-    if (!model) return;
-    if (model.type === 'markov') {
-      const target = pickNode([cur.x, cur.y], nodeIndex); // pickNode indexes point[0]/point[1] — an
-                                                            // {x,y} object here silently NaNs every
-                                                            // distance and always returns null
-      if (!target) return; // dropped on empty space: silently cancel (no gesture-level self-loop
-                            // ban — A->A IS allowed; ops.addTransition is what actually validates it)
-      runOp(activeStore, (m) => addTransition(m, fromTarget.key, target.key));
-    } else if (model.type === 'tree') {
-      const target = pickNode([cur.x, cur.y], nodeIndex);
-      if (target) { showToast('trees are trees'); return; } // dropped on an existing node: invalid
-      runOp(activeStore, (m) => addChild(m, fromTarget.path));
-    }
-  }
-
-  function endGesture(e) {
-    if (!gesture) return;
-    const g = gesture;
-    gesture = null;
-    try { svgEl.releasePointerCapture(g.pointerId); } catch { /* already released */ }
-    if (g.ghostEl) { try { g.ghostEl.remove(); } catch { /* already detached */ } }
-
-    const cur = clientToUser(e.clientX, e.clientY);
-    const activeStore = scopedStoreFor(store, currentModelPath);
-
-    if (g.target.domKind === 'background') {
-      if (tool === 'select' && !g.moved) activeStore.select({ kind: null, id: null });
-      else if (tool === 'add' && !g.moved) addOnBackground(activeStore, cur);
-      return;
-    }
-
-    if (g.target.domKind === 'edge') {
-      if (g.moved) return; // edges aren't draggable; ignore anything but a plain click
-      if (tool === 'select') {
-        if (g.target.variant === 'markov') {
-          activeStore.select({ kind: 'edge', id: { from: g.target.from, to: g.target.to } });
-        } else {
-          activeStore.select({ kind: 'node', id: g.target.path }); // a tree "edge" IS its child node
-        }
-      } else if (tool === 'delete') {
-        if (g.target.variant === 'markov') runOp(activeStore, (m) => deleteTransition(m, g.target.from, g.target.to));
-        else runOp(activeStore, (m) => deleteNode(m, g.target.path));
-      }
-      return;
-    }
-
-    if (g.target.domKind === 'node') {
-      if (tool === 'select') {
-        if (g.moved) moveNodeEnd(activeStore, g.target, cur);
-        else {
-          const sel = g.target.kind === 'state'
-            ? { kind: 'state', id: g.target.key }
-            : { kind: 'node', id: g.target.path };
-          activeStore.select(sel);
-        }
-      } else if (tool === 'add' && !g.moved) {
-        addOnNode(activeStore, g.target);
-      } else if (tool === 'connect' && g.moved) {
-        connectDrop(activeStore, g.target, cur);
-      } else if (tool === 'delete' && !g.moved) {
-        if (g.target.kind === 'state') runOp(activeStore, (m) => deleteState(m, g.target.key));
-        else runOp(activeStore, (m) => deleteNode(m, g.target.path));
-      }
-    }
-  }
-
-  svgEl.addEventListener('pointerdown', (e) => {
-    if (e.target !== svgEl) return; // only the bare background — nodes/edges stopPropagation()
-    flush();
-    startGesture(e, { domKind: 'background' });
-  });
-
-  svgEl.addEventListener('pointermove', (e) => {
-    if (!gesture) return;
-    const dxPx = e.clientX - gesture.startClientX;
-    const dyPx = e.clientY - gesture.startClientY;
-    if (Math.abs(dxPx) > 3 || Math.abs(dyPx) > 3) gesture.moved = true;
-
-    if (gesture.target.domKind === 'background' && tool === 'select') {
-      const rect = svgEl.getBoundingClientRect();
-      const scaleX = rect.width ? view.w / rect.width : 1;
-      const scaleY = rect.height ? view.h / rect.height : 1;
-      view.x = gesture.startViewX - dxPx * scaleX;
-      view.y = gesture.startViewY - dyPx * scaleY;
-      applyViewBox();
-      return;
-    }
-
-    if (gesture.target.domKind === 'node' && tool === 'select' && gesture.moved) {
-      const cur = clientToUser(e.clientX, e.clientY);
-      gesture.target.el.setAttribute('transform', `translate(${cur.x},${cur.y})`); // live preview only
-      return;
-    }
-
-    if (gesture.target.domKind === 'node' && tool === 'connect' && gesture.ghostEl) {
-      const cur = clientToUser(e.clientX, e.clientY);
-      // Same per-shape trim used to lay an edge's endpoint on a node's outline (render.js) — the
-      // ghost line is a preview of exactly that edge, so it reuses treeTrimRadius rather than the
-      // (unrelated) hit-testing shape on gesture.target.hit. treeTrimRadius(undefined) falls
-      // through to NODE_R, which is also the right trim for a markov state (treeKind is undefined
-      // there) — see render.js's own comment on that function.
-      gesture.ghostEl.setAttribute('d', edgePath(gesture.target.xy, [cur.x, cur.y], treeTrimRadius(gesture.target.treeKind)));
-    }
-  });
-
-  svgEl.addEventListener('pointerup', endGesture);
-  svgEl.addEventListener('pointercancel', () => {
-    // Same cleanup as cancelGesture(): a cancelled gesture never reaches endGesture, so a
-    // node-move's live-preview transform (set directly via setAttribute during pointermove, with
-    // no setLayout op ever committed) would otherwise stay stuck on screen out of sync with the
-    // model. render() discards it by rebuilding from the model's real (unchanged) layout.
-    if (gesture?.ghostEl) { try { gesture.ghostEl.remove(); } catch { /* ignore */ } }
-    gesture = null;
-    render();
+  // The gesture state machine itself (canvas/gestures.js, Task 5): owns pointerdown/move/up/cancel
+  // on svgEl and the Space latch; everything it needs back from here (store access, selection,
+  // scope entry, rename, panning) arrives as the callbacks below. `gestures.handlers` is what
+  // render() passes into buildSvg, above, so a node/edge's own pointerdown (wired by render.js,
+  // which calls e.stopPropagation()) still reaches this machinery.
+  const gestures = createGestures(svgEl, {
+    getNodeIndex: () => nodeIndex,
+    getModel: resolveActiveModel,
+    getActiveStore: () => scopedStoreFor(store, currentModelPath),
+    clientToUser,
+    flush,
+    runOp,
+    render,
+    showToast,
+    panBy,
+    startRename,
+    enterSubModel,
+    selectTarget,
+    getScopedSelection: scopedSelection,
   });
 
   svgEl.addEventListener('wheel', (e) => {
@@ -605,7 +397,6 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
 
   return {
     render,
-    setTool,
     currentModelPath,
     openScope,
   };
