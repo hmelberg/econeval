@@ -572,7 +572,9 @@ test('snapToGrid rounds to the nearest 12px multiple', () => {
   assert.deepEqual(snapToGrid([0, 0]), [0, 0]);
   assert.deepEqual(snapToGrid([17, 5]), [12, 0]);
   assert.deepEqual(snapToGrid([18, 19]), [24, 24]);
+  // -5 / 12 rounds to -0; assert/strict tells -0 and 0 apart, so this pins the normalization.
   assert.deepEqual(snapToGrid([-17, -5]), [-12, 0]);
+  assert.ok(Object.is(snapToGrid([-17, -5])[1], 0), 'negative zero must be normalized to +0');
 });
 
 test('fitBox wraps every position with padding', () => {
@@ -628,8 +630,12 @@ export function pickNode(point, nodeIndex, slack = HIT_SLACK) {
   return null;
 }
 
+// The trailing `+ 0` is load-bearing, not decoration: Math.round(-5 / 12) is -0, and -0 * 12 stays
+// -0. A -0 reaching setLayout serializes into the YAML as `-0`, which makes two otherwise identical
+// models compare unequal — and node:assert/strict's deepEqual distinguishes it from 0, so the test
+// below catches it. Adding 0 collapses -0 to 0 and leaves every other value alone.
 export function snapToGrid(xy, grid = GRID) {
-  return [Math.round(xy[0] / grid) * grid, Math.round(xy[1] / grid) * grid];
+  return [Math.round(xy[0] / grid) * grid + 0, Math.round(xy[1] / grid) * grid + 0];
 }
 
 export function fitBox(positions, pad = 60) {
@@ -676,7 +682,9 @@ The change users will feel first: edges stop being 1.5px targets.
 ```js
 // js/ui/canvas/render.js
 buildSvg(svgEl, model, { positions, selection, handlers }) -> nodeIndex
-// handlers: {onNodePointerDown(e, id), onEdgePointerDown(e, target), onContextMenu(e, target)}
+// handlers: {onNodePointerDown(e, id), onEdgePointerDown(e, target)}
+// Task 8 adds a third, onContextMenu, together with the listeners that call it — do NOT wire a
+// contextmenu listener here, so the whole menu feature lands in one reviewable diff.
 // nodeIndex entry: {kind:'state'|'node', key?|path?, xy, hit, el, treeKind?, node?, state?}
 //   `hit` comes from geometry.hitShapeFor(...) — NOT the old scalar `hitR`.
 
@@ -1221,7 +1229,7 @@ Replaces the three-tab inspector. The largest task; it lands in one piece becaus
 
 **Interfaces:**
 - Consumes: `buildOutline`, `filterRows` (Task 9); `scopedStoreFor` (Task 1).
-- Produces: `createInspector(rootEl, headEl, store, {flush}) -> {render, revealSelection}` — `setActiveTab` is gone.
+- Produces: `createInspector(rootEl, headEl, store, {flush, openScope}) -> {render, revealSelection}` — `setActiveTab` is gone, and `openScope` is new. A row click has to drill the canvas into the row's sub-model scope before selecting, but inspector.js holds no canvas reference — importing one would rebuild exactly the backwards peer dependency Task 1 exists to remove. So `app.js` injects `canvas.openScope` (it constructs the canvas at line 225, before the inspector at line 230). Default it to a no-op.
 
 - [ ] **Step 1: Build the shell**
 
