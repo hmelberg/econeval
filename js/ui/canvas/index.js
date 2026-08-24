@@ -1,90 +1,45 @@
 // SVG canvas renderer for econeval models.
 //
 // Two halves, per constraints.md ("DOM modules ... hold no business logic"):
-//   1. Pure geometry (moved to canvas/geometry.js, covered by test/canvas-geometry.test.js):
-//      geometry helpers, shape descriptors, hit-testing, snap-to-grid, fit-box. None touch DOM.
-//   2. createCanvas(svgEl, store, {layoutFor}) — the DOM-heavy renderer. Reads store.get().model
-//      (or, once a sub-model has been entered, model.models[name] via the same currentModelPath
-//      chase), positions nodes via the injected layoutFor, and re-renders in full on every
-//      store.subscribe notification (no vDOM — fine at this scale, per the brief).
+//   1. Pure geometry (canvas/geometry.js, covered by test/canvas-geometry.test.js): geometry
+//      helpers, shape descriptors, hit-testing, snap-to-grid, fit-box. None touch DOM.
+//   2. DOM building (canvas/render.js): buildSvg(svgEl, model, {positions, selection, handlers})
+//      constructs the <g> tree of nodes/edges and wires their pointerdown listeners to call back
+//      into the `handlers` this module passes in — it never touches the store or applies an op.
+// This file (createCanvas(svgEl, store, {layoutFor, flush})) is the third piece (Task 4 split it
+// out of the old js/ui/canvas.js, which combined all three): store/selection resolution, the
+// pointer-gesture state machine (pan / node drag-to-move / connect drag), the toolbar, inline
+// rename, keyboard shortcuts and the toast strip. Reads store.get().model (or, once a sub-model
+// has been entered, model.models[name] via the same currentModelPath chase), positions nodes via
+// the injected layoutFor, and re-renders in full on every store.subscribe notification (no vDOM —
+// fine at this scale, per the brief).
 //
 // Scope: Task 9 delivered render + click-to-select + double-click-to-enter-a-sub-model + pan/zoom.
-// Task 10 (this revision) adds the editing gestures: a 4-tool toolbar (Select/Add/Connect/Delete,
-// appended into #canvas-toolbar — panels.js's maximize button already lives there, never
-// replaced), node drag-to-move (live preview + one setLayout op on release), inline
-// foreignObject rename, Add/Connect/Delete tool click & drag gestures, a transient toast strip
-// for op errors, and the store's optional {flush} callback (Task 12 passes sync.flush — see the
-// controller ruling below).
+// Task 10 added the editing gestures: a 4-tool toolbar (Select/Add/Connect/Delete, appended into
+// #canvas-toolbar — panels.js's maximize button already lives there, never replaced), node
+// drag-to-move (live preview + one setLayout op on release), inline foreignObject rename, Add/
+// Connect/Delete tool click & drag gestures, a transient toast strip for op errors, and the
+// store's optional {flush} callback (Task 12 passes sync.flush — see the controller ruling below).
+// Task 4 split the file in two (this module + render.js) and replaced the old scalar `hitR` with
+// `hit` shape descriptors from geometry.hitShapeFor, so every node/edge gets a real hit area
+// instead of a uniform circle (or, for edges, only the painted 1.5px stroke) — setTool/the toolbar
+// itself are unchanged here and are deleted in Task 5.
 
 import {
-  nodeAt, addState, renameState, deleteState, addTransition, deleteTransition, setLayout,
+  addState, renameState, deleteState, addTransition, deleteTransition, setLayout,
   addChild, renameNode, deleteNode,
-} from './ops.js';
+} from '../ops.js';
 
-const SVG_NS = 'http://www.w3.org/2000/svg';
+import { BASE_W, BASE_H, edgePath, pickNode } from './geometry.js';
+import { el, buildSvg, treeTrimRadius } from './render.js';
 
-// Geometry and constants moved to canvas/geometry.js (Task 3).
-import {
-  NODE_R, ROOT_HALF, TERMINAL_HALF, STADIUM_W, STADIUM_H, STADIUM_INSET, HALO_GAP,
-  SELF_LOOP_SPREAD, SELF_LOOP_HEIGHT, BASE_W, BASE_H,
-  edgePath, selfLoopPath, selfLoopLabelPos, edgeLabelPos,
-} from './canvas/geometry.js';
+import { scopedStore, scopedStoreFor } from '../scoped-store.js';
 
-const LABEL_MAX = 14;              // edge-label truncation length (brief: "max 14 chars + ...")
 const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 2.5;
 
-function truncateLabel(s, max = LABEL_MAX) {
-  const str = String(s);
-  return str.length > max ? `${str.slice(0, max - 1)}…` : str;
-}
-
-// The p-source text rule (brief, verbatim): 'rest' shown as 'rest', numbers as-is, expressions
-// verbatim — then truncated. Used for both markov transition `p` and tree node `p`.
-function pLabelText(p) {
-  if (p === undefined || p === null) return '';
-  return truncateLabel(typeof p === 'number' ? String(p) : p);
-}
-
-import { scopedStore, scopedStoreFor } from './scoped-store.js';
-
-// ---------------------------------------------------------------------------------------------
-// DOM-heavy renderer.
-// ---------------------------------------------------------------------------------------------
-
 function clamp(v, lo, hi) {
   return Math.min(hi, Math.max(lo, v));
-}
-
-function el(tag, attrs = {}, ...children) {
-  const e = document.createElementNS(SVG_NS, tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (v !== null && v !== undefined) e.setAttribute(k, String(v));
-  }
-  for (const c of children) {
-    if (c !== null && c !== undefined) e.appendChild(c);
-  }
-  return e;
-}
-
-function text(s) {
-  return document.createTextNode(s);
-}
-
-function hasReward(entry) {
-  return entry.cost !== undefined || entry.utility !== undefined;
-}
-
-function payoffSummary(payoffs) {
-  const keys = Object.keys(payoffs || {});
-  if (keys.length === 0) return '';
-  return keys.map((k) => `${k} ${payoffs[k]}`).join('   ');
-}
-
-function treeNodeKind(node, path) {
-  if (path.length === 1) return 'root';
-  if (node.children.length === 0) return node.model ? 'submodel' : 'terminal';
-  return 'chance';
 }
 
 // createCanvas(svgEl, store, opts) options contract (Task 10 addition, binding — Task 12 consumes
@@ -109,10 +64,11 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
   const view = { x: 0, y: 0, w: BASE_W, h: BASE_H };
   let zoom = 1;
   let gesture = null;       // the in-flight pointer gesture (pan / node move / connect drag), or null
-  let nodeIndex = [];       // rebuilt every render: [{kind, key|path, xy, hitR, el, ...}] — used for
-                             // hit-testing (Connect-tool drop target) and for re-resolving a node's
-                             // CURRENT element/position at gesture-start (after flush() may have
-                             // re-rendered) rather than trusting a stale closure reference.
+  let nodeIndex = [];       // rebuilt every render (buildSvg's return value): [{kind, key|path, xy,
+                             // hit, el, ...}] — used for hit-testing (Connect-tool drop target) and
+                             // for re-resolving a node's CURRENT element/position at gesture-start
+                             // (after flush() may have re-rendered) rather than trusting a stale
+                             // closure reference.
   let lastDown = null;      // { kind, key|path, time } — for hand-rolled double-click detection
                              // (self-timed rather than relying on native dblclick synthesis, which
                              // interacts unpredictably with pointer capture; see task-10 report)
@@ -142,11 +98,11 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
     return true;
   }
 
-  // selection.modelPath is stamped by scopedStore.select (js/ui/canvas.js, top half) with the
-  // exact chain of sub-model names the selection was made through; [] / undefined means the
-  // top-level model. A selection only renders a halo when it matches the scope CURRENTLY on
-  // screen — otherwise an unrelated sub-model's selection would incorrectly highlight something
-  // in the wrong view (or nothing at all, if the id happens not to resolve here).
+  // selection.modelPath is stamped by scopedStore.select (js/ui/scoped-store.js) with the exact
+  // chain of sub-model names the selection was made through; [] / undefined means the top-level
+  // model. A selection only renders a halo when it matches the scope CURRENTLY on screen —
+  // otherwise an unrelated sub-model's selection would incorrectly highlight something in the
+  // wrong view (or nothing at all, if the id happens not to resolve here).
   function sameModelPath(a, b) {
     return arraysEqual(a ?? [], b ?? []);
   }
@@ -220,24 +176,6 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
       });
       breadcrumbEl.appendChild(seg);
     });
-  }
-
-  // -------- svg defs (arrowhead marker) --------
-
-  function buildDefs() {
-    const defs = el('defs');
-    const marker = el('marker', {
-      id: 'arrow',
-      viewBox: '0 0 10 10',
-      refX: '9',
-      refY: '5',
-      markerWidth: '7',
-      markerHeight: '7',
-      orient: 'auto-start-reverse',
-    });
-    marker.appendChild(el('path', { class: 'arrowhead', d: 'M0,0 L10,5 L0,10 Z' }));
-    defs.appendChild(marker);
-    return defs;
   }
 
   // -------- toolbar (Select/Add/Connect/Delete — appended into #canvas-toolbar; panels.js's own
@@ -351,7 +289,7 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
     // `if (activeRename) commitRename();`. With the old remove-then-null order, that handler ran
     // while activeRename was still set, re-entering commitRename() and silently COMMITTING the
     // edited text instead of cancelling it — on Escape, and on any external re-render while a
-    // rename was open (buildSvg's own cancelRename() cleanup call runs this same path).
+    // rename was open (render()'s own cancelRename() cleanup call runs this same path).
     const rec = activeRename;
     if (!rec) return;
     activeRename = null;
@@ -397,7 +335,7 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
     input.addEventListener('blur', () => { if (activeRename) commitRename(); });
   }
 
-  // -------- node identity / double-click detection --------
+  // -------- node/edge identity / double-click detection / handlers passed into buildSvg --------
 
   const DOUBLE_CLICK_MS = 400;
 
@@ -427,238 +365,12 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
     startGesture(e, { domKind: 'node', ...fresh });
   }
 
-  // -------- markov --------
-
-  function renderMarkovEdge(from, to, fromXY, toXY, label, reward, selected) {
-    const g = el('g', { class: 'edge' });
-    const isLoop = from === to;
-    const d = isLoop ? selfLoopPath(fromXY, NODE_R) : edgePath(fromXY, toXY, NODE_R);
-    if (selected) g.appendChild(el('path', { class: 'edge-halo', d }));
-    g.appendChild(el('path', { class: 'edge-line', d, 'marker-end': 'url(#arrow)' }));
-    if (label) {
-      const [lx, ly] = isLoop ? selfLoopLabelPos(fromXY, NODE_R) : edgeLabelPos(fromXY, toXY);
-      const labelText = reward ? `${label} ⊕` : label;
-      g.appendChild(el('text', { class: 'edge-label', x: lx, y: ly, 'text-anchor': 'middle' }, text(labelText)));
-    }
-    g.addEventListener('pointerdown', (e) => {
-      e.stopPropagation();
-      flush();
-      startGesture(e, { domKind: 'edge', variant: 'markov', from, to });
-    });
-    return g;
+  function handleEdgePointerDown(e, target) {
+    flush(); // controller ruling: sync any pending debounced YAML edit before this gesture starts
+    startGesture(e, { domKind: 'edge', ...target });
   }
 
-  function renderMarkovNode(state, xy, isSelected) {
-    const [cx, cy] = xy;
-    const g = el('g', { class: 'node', 'data-kind': 'state', transform: `translate(${cx},${cy})` });
-    if (isSelected) g.appendChild(el('circle', { class: 'halo', cx: 0, cy: 0, r: NODE_R + HALO_GAP }));
-    g.appendChild(el('circle', { class: 'node-shape', cx: 0, cy: 0, r: NODE_R }));
-    g.appendChild(el('text', {
-      class: 'node-name', x: 0, y: 0, 'text-anchor': 'middle', 'dominant-baseline': 'central',
-    }, text(state.name)));
-    g.addEventListener('pointerdown', (e) => {
-      e.stopPropagation();
-      handleNodePointerDown(e, { kind: 'state', key: state.name });
-    });
-    return g;
-  }
-
-  function renderMarkov(model, positions, selection, edgesG, nodesG) {
-    for (const state of model.states) {
-      const row = model.transitions[state.name];
-      const fromXY = positions[state.name];
-      if (!row || !fromXY) continue;
-
-      if (row.type === 'multinomial') {
-        const total = Object.values(row.counts).reduce((a, b) => a + b, 0);
-        for (const [target, count] of Object.entries(row.counts)) {
-          const toXY = positions[target];
-          if (target !== state.name && !toXY) continue;
-          const selected = selection?.kind === 'edge' && selection.id.from === state.name && selection.id.to === target;
-          edgesG.appendChild(renderMarkovEdge(state.name, target, fromXY, toXY, `${count}/${total}`, false, selected));
-        }
-      } else {
-        for (const [target, entry] of Object.entries(row.to)) {
-          const toXY = positions[target];
-          if (target !== state.name && !toXY) continue;
-          const selected = selection?.kind === 'edge' && selection.id.from === state.name && selection.id.to === target;
-          edgesG.appendChild(renderMarkovEdge(state.name, target, fromXY, toXY, pLabelText(entry.p), hasReward(entry), selected));
-        }
-      }
-    }
-
-    for (const state of model.states) {
-      const xy = positions[state.name];
-      if (!xy) continue;
-      const isSelected = selection?.kind === 'state' && selection.id === state.name;
-      const g = renderMarkovNode(state, xy, isSelected);
-      nodesG.appendChild(g);
-      nodeIndex.push({ kind: 'state', key: state.name, xy, hitR: NODE_R, el: g, state });
-    }
-  }
-
-  // -------- tree --------
-
-  function shapeForKind(kind) {
-    switch (kind) {
-      case 'root':
-        return el('rect', {
-          class: 'node-shape', x: -ROOT_HALF, y: -ROOT_HALF, width: ROOT_HALF * 2, height: ROOT_HALF * 2,
-        });
-      case 'chance':
-        return el('circle', { class: 'node-shape', cx: 0, cy: 0, r: NODE_R });
-      case 'terminal':
-        return el('line', { class: 'terminal-bar', x1: 0, y1: -TERMINAL_HALF, x2: 0, y2: TERMINAL_HALF });
-      case 'submodel': {
-        const g = el('g', { class: 'submodel-shape' });
-        g.appendChild(el('rect', {
-          class: 'node-shape', x: -STADIUM_W / 2, y: -STADIUM_H / 2, width: STADIUM_W, height: STADIUM_H,
-          rx: STADIUM_H / 2, ry: STADIUM_H / 2,
-        }));
-        const iw = STADIUM_W - 2 * STADIUM_INSET;
-        const ih = STADIUM_H - 2 * STADIUM_INSET;
-        g.appendChild(el('rect', {
-          class: 'node-shape-inner', x: -iw / 2, y: -ih / 2, width: iw, height: ih, rx: ih / 2, ry: ih / 2,
-        }));
-        return g;
-      }
-      default:
-        return el('circle', { class: 'node-shape', cx: 0, cy: 0, r: NODE_R });
-    }
-  }
-
-  function haloForKind(kind) {
-    switch (kind) {
-      case 'root':
-        return el('rect', {
-          class: 'halo', x: -ROOT_HALF - HALO_GAP, y: -ROOT_HALF - HALO_GAP,
-          width: (ROOT_HALF + HALO_GAP) * 2, height: (ROOT_HALF + HALO_GAP) * 2,
-        });
-      case 'terminal':
-        return el('circle', { class: 'halo', cx: 0, cy: 0, r: TERMINAL_HALF + HALO_GAP });
-      case 'submodel':
-        return el('rect', {
-          class: 'halo', x: -STADIUM_W / 2 - HALO_GAP, y: -STADIUM_H / 2 - HALO_GAP,
-          width: STADIUM_W + 2 * HALO_GAP, height: STADIUM_H + 2 * HALO_GAP,
-          rx: (STADIUM_H + 2 * HALO_GAP) / 2, ry: (STADIUM_H + 2 * HALO_GAP) / 2,
-        });
-      case 'chance':
-      default:
-        return el('circle', { class: 'halo', cx: 0, cy: 0, r: NODE_R + HALO_GAP });
-    }
-  }
-
-  // Approximate per-shape trim radius so an edge's endpoint lands close to the node's own outline
-  // rather than uniformly at NODE_R regardless of shape (a stadium is much wider than a circle;
-  // a terminal bar has almost no footprint at all). edgePath's contract is a single `r` trimming
-  // BOTH ends equally, so this is a deliberate approximation, not exact geometry — good enough for
-  // the mostly-horizontal edges autoTree produces.
-  function treeTrimRadius(kind) {
-    if (kind === 'terminal') return 12;
-    if (kind === 'submodel') return STADIUM_W / 2 - 10;
-    return NODE_R; // root, chance
-  }
-
-  function renderTreeEdge(parentXY, childXY, label, childPath, childKind) {
-    const g = el('g', { class: 'edge' });
-    const d = edgePath(parentXY, childXY, treeTrimRadius(childKind));
-    g.appendChild(el('path', { class: 'edge-line', d }));
-    if (label) {
-      const [lx, ly] = edgeLabelPos(parentXY, childXY);
-      g.appendChild(el('text', { class: 'edge-label', x: lx, y: ly, 'text-anchor': 'middle' }, text(label)));
-    }
-    g.addEventListener('pointerdown', (e) => {
-      e.stopPropagation();
-      flush();
-      startGesture(e, { domKind: 'edge', variant: 'tree', path: childPath });
-    });
-    return g;
-  }
-
-  function renderTreeNode(node, xy, kind, isSelected, path) {
-    const [cx, cy] = xy;
-    const g = el('g', { class: 'node', 'data-kind': kind, transform: `translate(${cx},${cy})` });
-    if (isSelected) g.appendChild(haloForKind(kind));
-    g.appendChild(shapeForKind(kind));
-
-    const isBar = kind === 'terminal';
-    const nameX = isBar ? TERMINAL_HALF - 4 : 0;
-    const anchor = isBar ? 'start' : 'middle';
-    const nameText = kind === 'submodel' ? `model: ${node.model}` : node.name;
-    g.appendChild(el('text', {
-      class: 'node-name', x: nameX, y: isBar ? -4 : 0, 'text-anchor': anchor,
-      'dominant-baseline': isBar ? undefined : 'central',
-    }, text(nameText)));
-
-    const payoffText = payoffSummary(node.payoffs);
-    if (payoffText) {
-      g.appendChild(el('text', {
-        class: 'node-payoff', x: nameX, y: isBar ? 12 : NODE_R + 14, 'text-anchor': anchor,
-      }, text(payoffText)));
-    }
-
-    g.addEventListener('pointerdown', (e) => {
-      e.stopPropagation();
-      handleNodePointerDown(e, { kind: 'node', path });
-    });
-    return g;
-  }
-
-  function renderTree(model, positions, selection, edgesG, nodesG) {
-    let selectedNode = null;
-    if (selection?.kind === 'node') {
-      try {
-        selectedNode = nodeAt(model, selection.id);
-      } catch {
-        selectedNode = null; // selection belongs to a different (sub-)model than the one shown
-      }
-    }
-
-    function walk(node, path, parentXY) {
-      const key = path.join('/');
-      const xy = positions[key];
-      if (!xy) return;
-
-      const kind = treeNodeKind(node, path);
-
-      if (parentXY) {
-        const isRootChild = path.length === 2; // strategy branch: never carries 'p' (ops.js rule)
-        const label = isRootChild ? '' : pLabelText(node.p);
-        edgesG.appendChild(renderTreeEdge(parentXY, xy, label, path, kind));
-      }
-
-      const g = renderTreeNode(node, xy, kind, node === selectedNode, path);
-      nodesG.appendChild(g);
-      nodeIndex.push({ kind: 'node', path, xy, hitR: treeTrimRadius(kind), el: g, treeKind: kind, node });
-
-      for (const child of node.children) walk(child, [...path, child.name], xy);
-    }
-
-    walk(model.tree, [model.tree.name], null);
-  }
-
-  // -------- top-level render --------
-
-  function buildSvg(model) {
-    cancelRename();
-    svgEl.replaceChildren();
-    svgEl.setAttribute('data-model-type', model.type);
-    svgEl.appendChild(buildDefs());
-    const edgesG = el('g', { class: 'edges' });
-    const nodesG = el('g', { class: 'nodes' });
-    svgEl.appendChild(edgesG);
-    svgEl.appendChild(nodesG);
-
-    nodeIndex = [];
-    const positions = layoutFor(model);
-    // A selection only renders a halo when its modelPath matches the scope on screen right now
-    // (controller ruling — see sameModelPath above): a selection made inside a different
-    // sub-model, or at the top level while we're drilled into one, must not paint here.
-    const rawSelection = store.get().selection;
-    const selection = sameModelPath(rawSelection?.modelPath, currentModelPath) ? rawSelection : null;
-    if (model.type === 'markov') renderMarkov(model, positions, selection, edgesG, nodesG);
-    else if (model.type === 'tree') renderTree(model, positions, selection, edgesG, nodesG);
-  }
+  // -------- top-level render (delegates DOM construction to render.js's buildSvg) --------
 
   function render() {
     const top = store.get().model;
@@ -675,7 +387,19 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
       model = top;
     }
     renderBreadcrumb();
-    buildSvg(model);
+    cancelRename(); // buildSvg rebuilds the whole svg subtree; tear down any open rename first —
+                     // DOM cleanup that belongs here, not in render.js's pure DOM-construction.
+    const positions = layoutFor(model);
+    // A selection only renders a halo when its modelPath matches the scope on screen right now
+    // (controller ruling — see sameModelPath above): a selection made inside a different
+    // sub-model, or at the top level while we're drilled into one, must not paint here.
+    const rawSelection = store.get().selection;
+    const selection = sameModelPath(rawSelection?.modelPath, currentModelPath) ? rawSelection : null;
+    nodeIndex = buildSvg(svgEl, model, {
+      positions,
+      selection,
+      handlers: { onNodePointerDown: handleNodePointerDown, onEdgePointerDown: handleEdgePointerDown },
+    });
   }
 
   // -------- pan / node-move / connect-drag (one unified pointer gesture) + wheel zoom to cursor --------
@@ -686,7 +410,7 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
   // keep firing reliably even if the pointer leaves the node's small hit area mid-drag. Because
   // capture is always on svgEl, e.target on pointerup is svgEl regardless of what's visually
   // under the cursor — so the Connect tool's drop target is found via GEOMETRY hit-testing
-  // (hitTestNode) against nodeIndex, never via e.target. This also sidesteps every ambiguity
+  // (geometry.pickNode) against nodeIndex, never via e.target. This also sidesteps every ambiguity
   // around native click/dblclick synthesis interacting with pointer capture: nothing in this file
   // relies on a native 'click' or 'dblclick' event anywhere.
 
@@ -701,15 +425,6 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
     if (!ctm) return { x: clientX, y: clientY };
     const p = pt.matrixTransform(ctm.inverse());
     return { x: p.x, y: p.y };
-  }
-
-  function hitTestNode(point) {
-    for (const n of nodeIndex) {
-      const dx = point.x - n.xy[0];
-      const dy = point.y - n.xy[1];
-      if (Math.hypot(dx, dy) <= n.hitR) return n;
-    }
-    return null;
   }
 
   function startGesture(e, target) {
@@ -755,13 +470,13 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
     const model = activeStore.get().model;
     if (!model) return;
     if (model.type === 'markov') {
-      const hit = hitTestNode(cur);
-      if (!hit) return; // dropped on empty space: silently cancel (no gesture-level self-loop ban —
-                         // A->A IS allowed; ops.addTransition is what actually validates it)
-      runOp(activeStore, (m) => addTransition(m, fromTarget.key, hit.key));
+      const target = pickNode(cur, nodeIndex);
+      if (!target) return; // dropped on empty space: silently cancel (no gesture-level self-loop
+                            // ban — A->A IS allowed; ops.addTransition is what actually validates it)
+      runOp(activeStore, (m) => addTransition(m, fromTarget.key, target.key));
     } else if (model.type === 'tree') {
-      const hit = hitTestNode(cur);
-      if (hit) { showToast('trees are trees'); return; } // dropped on an existing node: invalid
+      const target = pickNode(cur, nodeIndex);
+      if (target) { showToast('trees are trees'); return; } // dropped on an existing node: invalid
       runOp(activeStore, (m) => addChild(m, fromTarget.path));
     }
   }
@@ -847,7 +562,12 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
 
     if (gesture.target.domKind === 'node' && tool === 'connect' && gesture.ghostEl) {
       const cur = clientToUser(e.clientX, e.clientY);
-      gesture.ghostEl.setAttribute('d', edgePath(gesture.target.xy, [cur.x, cur.y], gesture.target.hitR));
+      // Same per-shape trim used to lay an edge's endpoint on a node's outline (render.js) — the
+      // ghost line is a preview of exactly that edge, so it reuses treeTrimRadius rather than the
+      // (unrelated) hit-testing shape on gesture.target.hit. treeTrimRadius(undefined) falls
+      // through to NODE_R, which is also the right trim for a markov state (treeKind is undefined
+      // there) — see render.js's own comment on that function.
+      gesture.ghostEl.setAttribute('d', edgePath(gesture.target.xy, [cur.x, cur.y], treeTrimRadius(gesture.target.treeKind)));
     }
   });
 

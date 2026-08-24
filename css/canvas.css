@@ -41,6 +41,13 @@
   stroke: var(--ink);
   stroke-width: 1.5;
 }
+/* A tree terminal is a bare <line> with no fill, so (like an edge above) only its stroke would
+   otherwise be clickable. This transparent rect, sized from geometry.hitShapeFor('terminal'),
+   carries the real hit area — every other node kind has a paper-filled shape that already does. */
+#canvas .node-hit {
+  fill: transparent;
+  stroke: none;
+}
 
 #canvas .node-name {
   font-family: var(--font-ui);
@@ -65,6 +72,16 @@
 
 /* ---------- Edges ---------- */
 
+/* Edges are 1.5px strokes with no fill, so SVG's default visiblePainted hit-testing gives them a
+   1.5px-wide target — you had to hit an edge to the pixel. This invisible twin carries the hit
+   area; it is drawn first so it sits under the visible line and the arrowhead marker. */
+#canvas .edge-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14;
+  stroke-linecap: round;
+  pointer-events: stroke;
+}
 #canvas .edge-line {
   fill: none;
   stroke: var(--ink);

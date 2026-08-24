@@ -10,7 +10,7 @@
 import { createStore } from './store.js';
 import { createSync } from './sync.js';
 import { initPanels } from './panels.js';
-import { createCanvas } from './canvas.js';
+import { createCanvas } from './canvas/index.js';
 import { createInspector } from './inspector.js';
 import { createResults } from './results.js';
 import { layoutFor } from './layouts.js';
