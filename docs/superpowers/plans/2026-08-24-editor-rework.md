@@ -569,7 +569,10 @@ test('pickNode returns the topmost (last) match when shapes overlap', () => {
     { key: 'over', xy: [110, 100], hit: hitShapeFor('state') },
   ];
   assert.equal(pickNode([105, 100], index).key, 'over');
-  assert.equal(pickNode([80, 100], index).key, 'under');
+  // 70 is 30 from 'under' (within r+slack 32) but 40 from 'over' (outside it). Probing at 80 would
+  // land inside BOTH nodes' slack once the default forgiveness applies, and topmost-wins would
+  // return 'over' — the opposite of what this assertion is checking.
+  assert.equal(pickNode([70, 100], index).key, 'under');
   assert.equal(pickNode([400, 400], index), null);
 });
 
