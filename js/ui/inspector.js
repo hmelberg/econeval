@@ -74,16 +74,34 @@
 // otherwise every filter keystroke would visibly steal its own input's focus and jump the scroll
 // position. The collapsed-group Set and filter string are also the two pieces of outline state
 // persisted through panels.js's saveLayout (read-merge-write, same pattern panels.js's own
-// persist() uses) — replacing the old three-tab design's now-dead `tab` field.
+// persist() uses) — replacing the old three-tab design's now-dead `tab` field. `onlyFindings`
+// itself is NOT persisted (a session-only view preference).
+//
+// Findings (Task 11): check(model) is re-run on a 300ms debounce after every store notification
+// (scheduleFindingsCheck, mirroring results.js's own scheduleValidationBadge) into `latestFindings`,
+// then mapped onto the outline via js/ui/outline/build.js's attachFindings(allRows, latestFindings)
+// — never reimplemented here. The result drives three things, all patched onto the EXISTING DOM by
+// paintFindings() (see its own doc, just above its definition) and NEVER via render(): a colored dot
+// on the row that owns a finding (`byRow`), a rolled-up errors/warnings badge on group headers
+// (`counts`), and a "Model findings" list pinned at the bottom of the outline for `residual`
+// findings that match no row at all — nothing check() reports is ever silently dropped. A finding
+// whose path also matches a field currently rendered in the expanded row's `.otl-fields` block shows
+// a THIRD time, inline beneath that field, via the pre-existing fieldSlots/splitFindings mechanism —
+// unrelated to attachFindings, and unchanged by this task. The "Only findings" toggle (wired here)
+// composes with the text filter in a fixed order: filterRows(rows, query) first, then narrow to
+// rows with a non-zero attachFindings count (own finding, or an ancestor of one) — see render()'s
+// own comment at the composition site for why `counts` must be computed against the FULL row set,
+// not the already-filtered one.
 
 import { compile, ExprError } from '../core/expr.js';
 import { formatCycle } from '../core/model.js';
+import { check } from '../analysis/check.js';
 import { scopedStoreFor } from './scoped-store.js';
 import { loadLayout, saveLayout } from './panels.js';
 import * as ops from './ops.js';
 import {
   buildOutline, filterRows, scopePrefix, nodePathToCheckPath, rowForSelection, collapseFilter,
-  ancestorIds, addAfterIndex,
+  ancestorIds, addAfterIndex, attachFindings,
 } from './outline/build.js';
 
 // ================================================================================================
@@ -103,8 +121,10 @@ export function countByLevel(findings) {
 // splitFindings: findings whose `path` exactly matches a path in `renderedPaths` (a Set of check-
 // path strings currently backing a rendered field) go into `inline` (keyed by path, preserving
 // order, multiple findings per path stack); everything else goes into `rest`, in original order.
-// Not consumed by this module yet (findings integration is Task 11's job — see fieldSlots/
-// registerField below) — kept here, unchanged, because it is pure/DOM-free and already covered.
+// Consumed by paintFindings() below (Task 11) for the inline-under-a-rendered-field mechanism —
+// note this is a SEPARATE, field-scoped concern from attachFindings' row-scoped `byRow`/`residual`
+// (js/ui/outline/build.js): a finding can be both the dot on a row AND, when that row happens to be
+// the one currently expanded, an inline message under one of its fields at the same time.
 export function splitFindings(findings, renderedPaths) {
   const inline = new Map();
   const rest = [];
@@ -174,7 +194,31 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
   const initialOutline = loadLayout().outline ?? { collapsed: [], filter: '' };
   let collapsedGroups = new Set(initialOutline.collapsed ?? []);
   let filterQuery = initialOutline.filter ?? '';
-  let onlyFindings = false; // shell only in Task 10 (the button exists + toggles); Task 11 composes it with attachFindings' counts. Not persisted — a session-only view preference, unlike the filter text.
+  let onlyFindings = false; // wired below (buildFilterBar's click handler + render()'s onlyFindings composition). Not persisted — a session-only view preference, unlike the filter text.
+
+  // ---------- findings state (Task 11) ----------
+  //
+  // latestFindings: the last check(model) result, refreshed by the 300ms-debounced
+  // scheduleFindingsCheck() below on every store notification — never computed synchronously on
+  // every keystroke (check() walks the whole model; debouncing coalesces a burst of rapid store
+  // notifications, e.g. every keystroke of a debounced YAML-pane edit flushing, into one run).
+  // Mirrors results.js's own validationFindings/scheduleValidationBadge exactly (same interval,
+  // same "self-contained, not shared" module boundary), except this copy also drives the outline's
+  // dots/counts/residual list, not just a tab badge.
+  let latestFindings = [];
+  let findingsTimer = null;
+  // allRows: the FULL, unfiltered row list from the last render() (buildOutline(topModel) with no
+  // filterRows/onlyFindings/collapseFilter applied) — paintFindings() below recomputes
+  // attachFindings(allRows, latestFindings) against THIS cached list rather than calling
+  // buildOutline() fresh, so it always stays paired with rowElements/fieldSlots (also captured at
+  // the same last render()) even when a render() itself was skipped (shouldSkipRender, mid-typing)
+  // while the debounced check() still ran against the live (possibly newer) model. Using a fresh
+  // buildOutline() here instead could hand back row ids that don't match what's actually in the DOM
+  // right now (e.g. a state renamed elsewhere while render() was skipped), silently failing to find
+  // the row to patch — this way patching only ever targets rows genuinely present in rowElements.
+  let allRows = [];
+  let modelFindingsListEl = null; // the residual "Model findings" <ul>, from the last render()
+  let modelFindingsWrapEl = null; // its wrapping <div> (hidden when residual is empty)
 
   // ---------- op commit plumbing ----------
 
@@ -744,6 +788,114 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
     }
   }
 
+  // ---------- findings: row dots, group-header counts, inline field messages, residual list ----------
+  //
+  // paintFindings() is a DOM PATCH ONLY — it never calls render(), never rebuilds a row, never
+  // touches the visible row SET. It only flips hidden/class/textContent/title on elements that
+  // already exist (rowElements, fieldSlots, modelFindingsListEl), all captured at the last
+  // render(). This is the one rule the whole task turns on: a debounced check() firing mid-keystroke
+  // must never steal focus, and calling render() from here would do exactly that by a different
+  // door (see the module doc's render-discipline section). Called from two places: at the end of
+  // render() itself (so a freshly built row list shows correct dots/counts immediately, not blank
+  // for up to 300ms), and from scheduleFindingsCheck()'s timeout (so a debounced model change gets
+  // reflected even when shouldSkipRender() skipped the structural render that would otherwise show
+  // it).
+  //
+  // Dot vs. count badge: EVERY row (group or not) can carry `.otl-dot` OR `.otl-count` — outlineRow()
+  // below decides which element a given row gets, never both, so there's exactly one thing to patch
+  // per row. Non-group rows get `.otl-dot`: attachFindings' `byRow` map assigns each finding to the
+  // single most-specific row that owns it (js/ui/outline/build.js's longest-checkPath-match rule),
+  // so a dot means "this exact row has an own finding" — colored --danger if any of them is an
+  // error, --warn otherwise, `title` the joined messages (verbatim per the brief). GROUP headers
+  // (including `group:settings`, whose one row is also where settings-scoped findings land — there
+  // is no per-setting row to carry a dot instead) get `.otl-count` in place of a dot: attachFindings'
+  // `counts` map already sums a row's OWN findings together with every descendant's (see its own
+  // doc in build.js), so for a leaf group like Settings the badge alone already reflects its direct
+  // findings — no separate dot needed or shown for any group row. `counts` also has non-zero entries
+  // for ordinary structural rows with children (a state's edges, a tree node's descendants) — those
+  // are deliberately never shown as a badge (the brief's own wording: "counts... on group headers"),
+  // only used for the onlyFindings composition below.
+  function paintFindings() {
+    const { byRow, counts, residual } = attachFindings(allRows, latestFindings);
+
+    for (const [id, el] of rowElements) {
+      const dot = el.querySelector('.otl-dot');
+      if (dot) {
+        const findings = byRow.get(id);
+        if (findings && findings.length) {
+          const anyError = findings.some((f) => f.level === 'error');
+          dot.hidden = false;
+          dot.classList.toggle('otl-dot-error', anyError);
+          dot.classList.toggle('otl-dot-warn', !anyError);
+          dot.title = findings.map((f) => f.message).join(' · ');
+        } else {
+          dot.hidden = true;
+          dot.classList.remove('otl-dot-error', 'otl-dot-warn');
+          dot.removeAttribute('title');
+        }
+        continue;
+      }
+      const countEl = el.querySelector('.otl-count');
+      if (!countEl) continue; // defensive; every row has exactly one of the two, per outlineRow()
+      const c = counts.get(id);
+      countEl.replaceChildren();
+      if (c) {
+        countEl.hidden = false;
+        if (c.errors > 0) countEl.appendChild(h('span', { class: 'insp-badge insp-badge-error' }, `${c.errors} error${c.errors === 1 ? '' : 's'}`));
+        if (c.warnings > 0) countEl.appendChild(h('span', { class: 'insp-badge insp-badge-warn' }, `${c.warnings} warning${c.warnings === 1 ? '' : 's'}`));
+      } else {
+        countEl.hidden = true;
+      }
+    }
+
+    // Inline field messages — predates the outline (see splitFindings' own doc above): a finding
+    // whose path exactly matches a check-path currently backing a RENDERED field (fieldSlots, only
+    // populated for the one expanded row's fields, or Settings') shows directly beneath that field,
+    // in addition to (never instead of) the dot on its row.
+    const renderedPaths = new Set(fieldSlots.keys());
+    const { inline } = splitFindings(latestFindings, renderedPaths);
+    for (const [path, errEl] of fieldSlots) {
+      const msgs = inline.get(path);
+      if (msgs && msgs.length) {
+        errEl.hidden = false;
+        errEl.textContent = msgs.map((m) => m.message).join(' · ');
+        const anyError = msgs.some((m) => m.level === 'error');
+        errEl.classList.toggle('insp-lvl-error', anyError);
+        errEl.classList.toggle('insp-lvl-warn', !anyError);
+      } else {
+        errEl.hidden = true;
+        errEl.textContent = '';
+        errEl.classList.remove('insp-lvl-error', 'insp-lvl-warn');
+      }
+    }
+
+    // Residual — findings matching NO row at all (attachFindings' own contract: never swallowed).
+    // Pinned at the bottom of the outline, independent of collapse/filter/onlyFindings state — a
+    // finding with nowhere else to go must stay visible regardless of what the row list is doing.
+    if (modelFindingsListEl) {
+      modelFindingsListEl.replaceChildren();
+      for (const f of residual) {
+        modelFindingsListEl.appendChild(h('li', { class: f.level === 'error' ? 'insp-lvl-error' : 'insp-lvl-warn' },
+          h('code', {}, f.path || '(model)'), ` — ${f.message}`));
+      }
+      if (modelFindingsWrapEl) modelFindingsWrapEl.hidden = residual.length === 0;
+    }
+  }
+
+  // Debounced 300ms, mirroring results.js's own scheduleValidationBadge() exactly (same interval,
+  // same "coalesce rapid store notifications" motivation) — but a SEPARATE timer/state, per that
+  // module's own "results.js stays self-contained" ruling (and symmetrically here: this module never
+  // reads results.js's validationFindings either).
+  function scheduleFindingsCheck() {
+    if (findingsTimer) clearTimeout(findingsTimer);
+    findingsTimer = setTimeout(() => {
+      findingsTimer = null;
+      const m = store.get().model;
+      latestFindings = m ? check(m) : [];
+      paintFindings();
+    }, 300);
+  }
+
   // ---------- outline chrome: filter bar, group collapse, row list ----------
 
   function persistOutlineState() {
@@ -783,7 +935,13 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
 
   // One row. Indent comes from `depth` via a custom property, so nesting needs no wrapper elements
   // and the whole list stays a flat sequence of siblings — which is what keeps scroll restoration
-  // and findings patching simple.
+  // and findings patching simple. Every row gets exactly ONE of `.otl-dot` (a single finding-colored
+  // dot, for any NON-group row with its own findings) or `.otl-count` (a rolled-up errors/warnings
+  // badge, EVERY group row, including `group:settings` — see paintFindings' own doc for why a leaf
+  // group's badge alone already covers its direct findings, no dot needed) — never both, so
+  // paintFindings() has exactly one thing to patch per row. Both start hidden/empty; paintFindings()
+  // (called at the end of every render() and again 300ms after every store change) fills them in
+  // place, never rebuilding a row.
   function outlineRow(row, { expanded, hasChildren, collapsed }) {
     const btn = h('button', {
       type: 'button', class: 'otl-row', id: `otl-${row.id}`,
@@ -795,7 +953,7 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
       h('span', { class: 'otl-twisty' }, hasChildren ? (collapsed ? '▸' : '▾') : ''),
       h('span', { class: 'otl-label' }, row.label),
       h('span', { class: 'otl-detail' }, row.detail),
-      h('span', { class: 'otl-dot', hidden: '' }), // Task 11 fills this in place, never rebuilds it
+      row.kind === 'group' ? h('span', { class: 'otl-count', hidden: '' }) : h('span', { class: 'otl-dot', hidden: '' }),
     );
     btn.addEventListener('click', () => {
       if (row.kind === 'group') { toggleCollapsed(row.id); return; }
@@ -830,6 +988,9 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
     fieldSlots = new Map();
     rowElements = new Map();
     selectedFieldsEl = null;
+    modelFindingsListEl = null;
+    modelFindingsWrapEl = null;
+    allRows = [];
     rootEl.replaceChildren();
 
     const topModel = state.model;
@@ -842,11 +1003,23 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
     const list = h('div', { class: 'otl-list' });
     rootEl.appendChild(list);
 
-    const allRows = buildOutline(topModel);
+    allRows = buildOutline(topModel);
     const filtered = filterRows(allRows, filterQuery);
-    // onlyFindings composition (keep only rows with findings or a findings-bearing descendant) is
-    // Task 11's job — it needs attachFindings' counts, which this task doesn't compute yet.
-    const visible = collapseFilter(filtered, collapsedGroups);
+    // onlyFindings composition (per the controller's "things the brief cannot know" note): applied
+    // AFTER filterRows, never before — a row survives onlyFindings when IT ITSELF has a finding OR
+    // it's an ancestor of one. attachFindings' `counts` (js/ui/outline/build.js) already rolls every
+    // descendant's findings up into each ancestor (group headers AND ordinary structural parents
+    // alike — a state with an erroring edge gets a non-zero count too, even though only group
+    // headers ever SHOW a badge for it, see outlineRow's doc), so "has a non-zero count" is exactly
+    // "has a finding or is an ancestor of one" — no second tree walk needed. `counts` is computed
+    // against `allRows` (the FULL, unfiltered set), not `filtered` — attachFindings needs every row
+    // present to resolve a finding to its true longest-checkPath match and to roll counts up
+    // correctly; computing it against an already-text-filtered subset could misattribute a finding
+    // to the wrong (shorter-checkPath) surviving ancestor, or roll a count into a group header that
+    // the true owning row (filtered out by the text query) was actually responsible for.
+    const { counts } = attachFindings(allRows, latestFindings);
+    const findingsFiltered = onlyFindings ? filtered.filter((r) => counts.has(r.id)) : filtered;
+    const visible = collapseFilter(findingsFiltered, collapsedGroups);
     const expandedRow = rowForSelection(allRows, state.selection);
     const expandedId = expandedRow ? expandedRow.id : null;
 
@@ -880,6 +1053,18 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
       if (i === addParamAfterIndex) list.appendChild(buildAddParamButton());
     });
 
+    // "Model findings" — pinned at the bottom of the outline (below the row list, always present
+    // in the DOM so paintFindings() can patch it without a rebuild; hidden via `hidden` whenever
+    // there's nothing residual to show). Independent of the filter/onlyFindings/collapse state
+    // above: a residual finding has no row to attach to at all, so nothing narrows it out of view.
+    const findingsWrap = h('div', { class: 'insp-model-findings', hidden: '' });
+    findingsWrap.appendChild(h('div', { class: 'insp-model-findings-head' }, 'Model findings'));
+    const findingsList = h('ul', { class: 'insp-model-findings-list' });
+    findingsWrap.appendChild(findingsList);
+    rootEl.appendChild(findingsWrap);
+    modelFindingsListEl = findingsList;
+    modelFindingsWrapEl = findingsWrap;
+
     rootEl.scrollTop = scrollTop;
     if (preserveFilterFocus) {
       const el = rootEl.querySelector('#otl-filter');
@@ -888,6 +1073,12 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
         if (filterSelStart != null) el.setSelectionRange(filterSelStart, filterSelEnd);
       }
     }
+
+    // Paints dots/counts/inline messages/residual list onto the row list just built above — a DOM
+    // patch only (see paintFindings' own doc), so it's safe to call unconditionally at the end of
+    // every structural render, keeping findings visible immediately rather than blank for up to
+    // 300ms until the next debounced check() happens to fire.
+    paintFindings();
 
     if (pendingFocusEl) {
       const toFocus = pendingFocusEl;
@@ -917,10 +1108,21 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
   }
 
   function onStoreChange() {
+    // Always reschedule the debounced findings check, REGARDLESS of shouldSkipRender's decision —
+    // the model may have changed even when the structural render itself is skipped (mid-typing
+    // elsewhere in this panel), and paintFindings() patches dots/counts/messages in place without
+    // touching row structure, so it's always safe to let it fire independently of render().
+    scheduleFindingsCheck();
     if (shouldSkipRender()) return;
     render();
   }
   store.subscribe(onStoreChange);
+
+  // Initial findings computation is synchronous (mirrors results.js's own boot-time check() call)
+  // — the very first render must show correct dots/counts/residual immediately, not a blank state
+  // for the first 300ms until the debounced path first fires.
+  const initModel = store.get().model;
+  latestFindings = initModel ? check(initModel) : [];
 
   render();
 

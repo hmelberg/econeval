@@ -470,6 +470,60 @@ button:active {
   color: #fff;
 }
 
+/* Findings (Task 11, js/ui/inspector.js's paintFindings()): a colored dot on the row that owns a
+   finding, or a rolled-up errors/warnings badge on a group header — outlineRow() gives each row
+   exactly one of the two elements below, never both (see its own doc), so exactly one of these two
+   rules ever applies per row. */
+.otl-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-left: var(--sp-1);
+}
+.otl-dot[hidden] {
+  display: none;
+}
+.otl-dot-error {
+  background: var(--danger);
+}
+.otl-dot-warn {
+  background: var(--warn);
+}
+.otl-count {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-left: var(--sp-1);
+}
+.otl-count[hidden] {
+  display: none;
+}
+
+/* .insp-badge / .insp-badge-error / .insp-badge-warn — a small pill for an errors/warnings count.
+   Used by .otl-count above AND by results.js's own Validation tab-strip badge (.res-tab-badge
+   wraps it; see that module's comment there — results.js never redefines these classes itself, it
+   only reuses them "for the same style"). Restores the rule Task 10 deleted along with the old
+   three-tab inspector's own tab-strip (results.js's usage was untouched by that removal, so its
+   badge has been rendering unstyled since — this fixes that as a side effect of needing the same
+   look here). */
+.insp-badge {
+  font-size: var(--fs-0);
+  font-family: var(--font-data);
+  padding: 1px var(--sp-1);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+.insp-badge-error {
+  background: var(--danger);
+  color: #fff;
+}
+.insp-badge-warn {
+  background: var(--warn);
+  color: #fff;
+}
+
 /* ---------- Inspector: shared field styles ---------- */
 
 .insp-empty,
