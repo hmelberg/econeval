@@ -10,7 +10,6 @@
 // createGestures(svgEl, {
 //   getNodeIndex, getModel, getActiveStore, clientToUser, flush, runOp,
 //   render, showToast, panBy, startRename, enterSubModel, selectTarget, getScopedSelection,
-//   openContextMenu,
 // }) -> { handlers, cancelGesture, destroy }
 //   handlers: {onNodePointerDown(e, id), onEdgePointerDown(e, target)} — the exact shape
 //   render.js's buildSvg expects. index.js merges a third handler, onContextMenu, into this
@@ -20,11 +19,6 @@
 //   there was one to cancel — index.js's Escape handler calls this and uses the return value to
 //   give gesture-cancel priority over deselecting. destroy(): removes every listener this module
 //   registered.
-//   `openContextMenu` ended up unused: Task 8 (the right-click menu) built entirely on index.js's
-//   own side instead of routing through this gesture state machine — a right-click needs no
-//   drag/drop-target resolution, so it never belonged to what this file owns. Left accepted
-//   (defaulted to a no-op) rather than removed, so createGestures's options contract doesn't
-//   shrink out from under a caller that still passes it.
 //
 // The real node NEVER moves during a drag (index.js's header + the design spec's §1.1): a
 // translucent clone (`.drag-ghost`) follows the cursor instead, so switching between the "move"
@@ -63,9 +57,6 @@ export function createGestures(svgEl, opts) {
   const {
     getNodeIndex, getModel, getActiveStore, clientToUser, flush, runOp,
     render, showToast, panBy, startRename, enterSubModel, selectTarget, getScopedSelection,
-    // Accepted (defaulted to a no-op) for the options contract's sake — see the header comment
-    // above: Task 8 (the right-click menu) never ended up calling this from in here.
-    openContextMenu = () => {},
   } = opts;
 
   let gesture = null;    // the in-flight pointer gesture (background/edge/node), or null

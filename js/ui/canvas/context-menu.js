@@ -17,6 +17,8 @@
 //   close — nothing outlives one menu's lifetime, so a dismissed-and-reopened menu never
 //   accumulates document-level listeners.
 
+import { clampMenuPosition } from './menu-position.js';
+
 const VIEWPORT_MARGIN = 8; // never let the menu touch the very edge of the viewport
 
 export function createContextMenu() {
@@ -68,16 +70,16 @@ export function createContextMenu() {
     for (const item of items) menu.appendChild(buildItemEl(item));
 
     // Measure before placing: a menu can't know its own rendered width/height until it's in the
-    // DOM, and the flip decision below needs both.
+    // DOM, and the flip decision below needs both. The flip/clamp arithmetic itself is a pure
+    // function once these DOM reads are in hand — see menu-position.js.
     menu.style.visibility = 'hidden';
     document.body.appendChild(menu);
     const { width, height } = menu.getBoundingClientRect();
-    const maxX = window.innerWidth - VIEWPORT_MARGIN;
-    const maxY = window.innerHeight - VIEWPORT_MARGIN;
-    const x = clientX + width > maxX ? clientX - width : clientX;
-    const y = clientY + height > maxY ? clientY - height : clientY;
-    menu.style.left = `${Math.max(VIEWPORT_MARGIN, x)}px`;
-    menu.style.top = `${Math.max(VIEWPORT_MARGIN, y)}px`;
+    const { left, top } = clampMenuPosition(
+      clientX, clientY, width, height, window.innerWidth, window.innerHeight, VIEWPORT_MARGIN,
+    );
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
     menu.style.visibility = '';
 
     menuEl = menu;
