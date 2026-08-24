@@ -39,7 +39,7 @@
 import { compile, ExprError } from '../core/expr.js';
 import { formatCycle } from '../core/model.js';
 import { check } from '../analysis/check.js';
-import { scopedStore } from './canvas.js';
+import { scopedStore } from './scoped-store.js';
 import { loadLayout, saveLayout } from './panels.js';
 import * as ops from './ops.js';
 
