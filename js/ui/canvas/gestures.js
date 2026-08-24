@@ -16,8 +16,10 @@
 //   render.js's buildSvg expects. index.js passes this object straight through as buildSvg's
 //   `handlers` on every render, so a node/edge's OWN pointerdown listener (attached by render.js,
 //   which calls e.stopPropagation()) still routes into this module's gesture machinery.
-//   cancelGesture(): aborts any in-flight gesture without committing anything — index.js's Escape
-//   handler calls this. destroy(): removes every listener this module registered.
+//   cancelGesture(): aborts any in-flight gesture without committing anything, returns true iff
+//   there was one to cancel — index.js's Escape handler calls this and uses the return value to
+//   give gesture-cancel priority over deselecting. destroy(): removes every listener this module
+//   registered.
 //   `openContextMenu` has no implementation until Task 8 — defaulted to a no-op here so this
 //   task's app is complete on its own; nothing calls it yet (Task 8 also wires the `contextmenu`
 //   listener, so the whole menu lands in one reviewable diff).
@@ -196,6 +198,21 @@ export function createGestures(svgEl, opts) {
     capture(e);
   }
 
+  // resolveDrop(cur, g, e) -> {target, connecting}: the ONE place that decides what a drop over
+  // `cur` means, given the source node `g.target`, whether the cursor has ever left the source's
+  // own hit area (`g.leftSource`), the Space latch, and the modifier keys on `e`. Both the live
+  // preview (onPointerMove) and the commit (endNodeGesture) call this SAME function — the design
+  // spec's §1.1 promise ("the preview never lies about the model") only holds if the two can never
+  // disagree, which a second, independently-maintained copy of this formula would risk the moment
+  // either one gets a new modifier and the other doesn't (review finding, Task 5 follow-up).
+  function resolveDrop(cur, g, e) {
+    const source = g.target;
+    const over = pickNode(cur, getNodeIndex());
+    const target = over && (over !== source || g.leftSource) ? over : null;
+    const connecting = !e.altKey && (spaceHeld || target !== null);
+    return { target, connecting };
+  }
+
   // -------- pointermove: pan (background) / move-vs-connect preview (node) --------
 
   svgEl.addEventListener('pointermove', onPointerMove);
@@ -219,11 +236,7 @@ export function createGestures(svgEl, opts) {
     const source = g.target;
     if (!g.leftSource && !isInside(cur, source.xy, source.hit)) g.leftSource = true;
 
-    const forceArrow = spaceHeld;
-    const forceMove = e.altKey;
-    const over = pickNode(cur, getNodeIndex());
-    const target = over && (over !== source || g.leftSource) ? over : null;
-    const connecting = !forceMove && (forceArrow || target !== null);
+    const { target, connecting } = resolveDrop(cur, g, e);
 
     if (connecting) {
       g.ghostNodeEl.style.display = 'none';
@@ -248,9 +261,7 @@ export function createGestures(svgEl, opts) {
   function endNodeGesture(g, cur, e) {
     const model = getModel();
     const source = g.target;
-    const over = pickNode(cur, getNodeIndex());
-    const target = over && (over !== source || g.leftSource) ? over : null;
-    const connecting = !e.altKey && (spaceHeld || target !== null);
+    const { target, connecting } = resolveDrop(cur, g, e);
     const store = getActiveStore();
 
     if (!g.moved) { selectTarget(source); return; }          // a plain click still just selects
@@ -281,6 +292,13 @@ export function createGestures(svgEl, opts) {
 
     // tree
     if (target) {
+      // Dropped back onto the source itself after leaving its hit area (the leave-and-return
+      // gesture): a tree has no self-parenting concept, so the spec's gesture table calls this a
+      // no-op. Without this guard, moveNode(path, path) would throw its own "cannot be dropped
+      // onto itself" and runOp would toast it — a plain error for a gesture the user most likely
+      // just aborted mid-drag, not a genuine failure. ops.moveNode's own self-drop guard is left
+      // exactly as it is (Task 8's context menu may reach it by other routes).
+      if (target === source) return;
       runOp(store, (m) => moveNode(m, source.path, target.path));
     } else {
       const at = e.metaKey ? [Math.round(cur.x), Math.round(cur.y)] : snapToGrid([cur.x, cur.y]);
@@ -406,14 +424,17 @@ export function createGestures(svgEl, opts) {
     handlers: { onNodePointerDown, onEdgePointerDown },
 
     // Aborts any in-flight gesture without committing anything — index.js's Escape handler calls
-    // this (escapeAll: "cancelling the rename and the gesture and now also clears the selection").
+    // this and uses the return value to decide whether Escape's job is already done (gesture
+    // cancel takes priority over deselecting — design spec's gesture table: "cancel gesture /
+    // rename, else deselect"). Returns true iff a gesture was actually in flight to cancel.
     cancelGesture() {
-      if (!gesture) return;
+      if (!gesture) return false;
       const g = gesture;
       gesture = null;
       release(g);
       removeGhosts(g);
       render();
+      return true;
     },
 
     destroy() {

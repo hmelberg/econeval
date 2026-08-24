@@ -138,7 +138,6 @@
 }
 #canvas .drop-ring {
   outline: none;
-  stroke: var(--accent);
 }
 #canvas .drop-ring .node-shape {
   stroke: var(--accent);

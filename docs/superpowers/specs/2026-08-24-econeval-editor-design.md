@@ -82,6 +82,12 @@ is a self-loop. Markov only; in a tree it is a no-op.
 Double-clicking empty space creates a node at that point in both model types. In a tree a node
 cannot be an orphan, so it becomes a child of the **current selection**; the selection must be a
 node in the scope the canvas is currently showing (`sameModelPath`), otherwise it does not count.
+
+**Ordering, discovered in implementation:** a single click on empty space deselects, so by the time
+the *second* click of a double-click runs, the selection the create needs is already gone. The first
+click therefore snapshots the selection before clearing it, and the create reads that snapshot. Both
+halves of this are required — dropping the deselect would leave no way to clear a selection by
+clicking away, and dropping the snapshot would make tree double-click-create impossible.
 With no usable selection the toast reads `Select a parent node first.` Space-drag from a node to
 empty space is the direct alternative — it names the parent by where the drag started — and in a
 tree the two produce the same result.

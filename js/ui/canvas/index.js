@@ -168,12 +168,14 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
     });
   }
 
-  // -------- escape: cancel rename / cancel gesture / clear selection (Task 5 — the toolbar and
-  // its 'select' tool are gone, so Escape's job shrinks to exactly these three, in order) --------
+  // -------- escape: cancel rename, ELSE cancel gesture, ELSE clear selection (design spec's
+  // gesture table: "cancel gesture / rename, else deselect" — priority, not all three at once.
+  // Cancelling a rename on a node, or a gesture dragging one, must not also silently drop the
+  // selection of that same node as a side effect.) --------
 
   function escapeAll() {
-    cancelRename();
-    gestures.cancelGesture();
+    if (activeRename) { cancelRename(); return; }
+    if (gestures.cancelGesture()) return;
     selectTarget(null);
   }
 
