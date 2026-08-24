@@ -385,6 +385,71 @@ export function deleteNode(model, path) {
   return m;
 }
 
+// Re-parents the node at `path` (with its whole subtree) under the node at `newParentPath`. The
+// tree reading of "connect these two": dragging A onto B makes A a child of B. Root-boundary `p`
+// handling mirrors addChild exactly — a root child is a strategy, entered unconditionally, so it
+// never carries a `p`; anywhere else a node needs one. An EXISTING p is never rewritten (the
+// surprise principle: a silent renumbering would be magic; check() flags a bad row sum instead).
+export function moveNode(model, path, newParentPath) {
+  assertTree(model, 'moveNode');
+  if (!Array.isArray(path) || path.length === 0)
+    throw new Error('moveNode: path must be a non-empty array of names');
+  if (!Array.isArray(newParentPath) || newParentPath.length === 0)
+    throw new Error('moveNode: newParentPath must be a non-empty array of names');
+  if (path.length === 1)
+    throw new Error('moveNode: the root node cannot be moved');
+
+  const samePath = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+  if (samePath(path, newParentPath))
+    throw new Error('moveNode: a node cannot be dropped onto itself');
+  // newParentPath sits inside path's own subtree iff it is longer and shares path as a prefix.
+  if (newParentPath.length > path.length && path.every((v, i) => v === newParentPath[i]))
+    throw new Error('moveNode: a node cannot be moved into its own descendant');
+
+  const m = clone(model);
+  const node = nodeAt(m, path);                       // validates path
+  const newParent = nodeAt(m, newParentPath);         // validates destination
+  const oldParent = nodeAt(m, path.slice(0, -1));
+
+  if (newParent.children.some((c) => c.name === node.name))
+    throw new Error(`moveNode: a child named '${node.name}' already exists under '${newParent.name}'`);
+
+  oldParent.children.splice(oldParent.children.indexOf(node), 1);
+
+  if (newParentPath.length === 1) {
+    delete node.p;                                    // promoted to a strategy
+  } else if (node.p === undefined) {
+    const hasRest = newParent.children.some((c) => c.p === 'rest');
+    node.p = hasRest ? 0 : 'rest';
+  }
+
+  newParent.children.push(node);
+
+  const oldPrefix = path.join('/');
+  const newPrefix = [...newParentPath, node.name].join('/');
+  m.layout = rekeyLayoutSubtree(m.layout, oldPrefix, newPrefix);
+
+  return m;
+}
+
+// Tidy: drops explicit positions so layouts.js's autoMarkov/autoTree takes over again. Without a
+// key, the whole layout goes. With one, a tree drops the named node's entire subtree (a child's
+// pinned position is meaningless once its parent moves) while a markov model drops exactly the one
+// state key. An empty result is normalized back to `null` — parseModel produces `obj.layout ?? null`
+// for an absent layout, so anything else would fail to round-trip through serialize/parse.
+export function clearLayout(model, key) {
+  const m = clone(model);
+  if (key === undefined || key === null) {
+    m.layout = null;
+    return m;
+  }
+  if (m.layout) {
+    m.layout = m.type === 'tree' ? scrubLayoutSubtree(m.layout, key) : omitKey(m.layout, key);
+    if (Object.keys(m.layout).length === 0) m.layout = null;
+  }
+  return m;
+}
+
 const NODE_ATTR_KEYS = new Set(['p', 'delay', 'model', 'notes', 'source']);
 
 export function setNodeAttr(model, path, key, value) {
