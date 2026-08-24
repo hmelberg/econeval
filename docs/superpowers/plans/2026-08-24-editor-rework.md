@@ -79,7 +79,7 @@ export function scopedStore(store, modelName)   // store-shaped wrapper: .get().
 export function scopedStoreFor(baseStore, path) // path.reduce((s, name) => scopedStore(s, name), baseStore)
 ```
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```js
 // test/scoped-store.test.js
@@ -155,23 +155,23 @@ test('undo/redo/markSaved/subscribe pass through', () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test test/scoped-store.test.js`
 Expected: FAIL — `Cannot find module '../js/ui/scoped-store.js'`
 
-- [ ] **Step 3: Move the code**
+- [x] **Step 3: Move the code**
 
 Cut `scopedStore` (`canvas.js:139-166`) and `scopedStoreFor` (`canvas.js:168-170`) verbatim into `js/ui/scoped-store.js`, keeping their explanatory comments. In `canvas.js` replace them with `import { scopedStore, scopedStoreFor } from './scoped-store.js';` and drop the local `export` keyword on `scopedStore`.
 
 Two other files import it from `canvas.js` and must be repointed in this same step, or the suite breaks: `inspector.js:42` (`import { scopedStore } from './canvas.js';` → `'./scoped-store.js'`), and `test/canvas-model.test.js:3`, which pulls `scopedStore` in alongside the geometry helpers — split that line into two imports, leaving `edgePath`/`selfLoopPath`/`edgeLabelPos`/`NODE_R` on `canvas.js` for now (Task 3 moves those). Its existing scopedStore tests, which drive a real `createStore`, stay exactly where they are — they complement the fake-store tests above rather than duplicating them.
 
-- [ ] **Step 4: Run the full suite**
+- [x] **Step 4: Run the full suite**
 
 Run: `npm test`
 Expected: PASS — 392 existing + 7 new.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 git add js/ui/scoped-store.js js/ui/canvas.js js/ui/inspector.js test/scoped-store.test.js
@@ -207,7 +207,7 @@ clearLayout(model, key?)              // key given: tree -> scrubLayoutSubtree(p
                                       // still round-trips through serialize/parse).
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```js
 // test/ops-move-node.test.js
@@ -386,12 +386,12 @@ test('does not mutate its input', () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `node --test test/ops-move-node.test.js test/ops-clear-layout.test.js`
 Expected: FAIL — `ops.moveNode is not a function`, `ops.clearLayout is not a function`
 
-- [ ] **Step 3: Implement both ops in `js/ui/ops.js`**
+- [x] **Step 3: Implement both ops in `js/ui/ops.js`**
 
 ```js
 // Re-parents the node at `path` (with its whole subtree) under the node at `newParentPath`. The
@@ -466,12 +466,12 @@ export function clearLayout(model, key) {
 }
 ```
 
-- [ ] **Step 4: Run the full suite**
+- [x] **Step 4: Run the full suite**
 
 Run: `npm test`
 Expected: PASS — 392 existing + 7 (Task 1) + 19 new.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 git add js/ui/ops.js test/ops-move-node.test.js test/ops-clear-layout.test.js
@@ -519,7 +519,7 @@ fitBox(positions, pad = 60)                      // positions = [[x,y], ...] -> 
                                                  // empty input -> {x:0, y:0, w:900, h:640} (BASE_W/BASE_H)
 ```
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```js
 // test/canvas-geometry.test.js
@@ -610,12 +610,12 @@ test('fitBox never produces a zero-sized box for a single node', () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test test/canvas-geometry.test.js`
 Expected: FAIL — `Cannot find module '../js/ui/canvas/geometry.js'`
 
-- [ ] **Step 3: Create the module**
+- [x] **Step 3: Create the module**
 
 Move `NODE_R`, `ROOT_HALF`, `TERMINAL_HALF`, `STADIUM_W`, `STADIUM_H`, `STADIUM_INSET`, `HALO_GAP`, `SELF_LOOP_SPREAD`, `SELF_LOOP_HEIGHT`, `BASE_W`, `BASE_H`, `edgePath`, `selfLoopPath`, `selfLoopLabelPos`, `edgeLabelPos` out of `canvas.js` into the new module with their comments intact, exporting all of them. Then add the four new functions. The stadium test is the one with real geometry in it:
 
@@ -667,12 +667,12 @@ export function fitBox(positions, pad = 60) {
 
 In `canvas.js`, replace the deleted block with `import { ... } from './canvas/geometry.js';` and re-export nothing. Repoint `test/canvas-model.test.js`'s `edgePath`/`selfLoopPath`/`edgeLabelPos`/`NODE_R` import to `../js/ui/canvas/geometry.js` (its `scopedStore` import already points at `scoped-store.js` after Task 1). Every assertion in that file stays as it is — this is a move, not a rewrite.
 
-- [ ] **Step 4: Run the full suite**
+- [x] **Step 4: Run the full suite**
 
 Run: `npm test`
 Expected: PASS. `test/canvas-model.test.js` keeps passing unchanged apart from its imports.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 git add js/ui/canvas/geometry.js js/ui/canvas.js test/canvas-geometry.test.js test/canvas-model.test.js
@@ -711,11 +711,11 @@ createCanvas(svgEl, store, {layoutFor, flush}) -> {render, setTool, currentModel
 // app keeps working end-to-end at every commit.
 ```
 
-- [ ] **Step 1: Move the code**
+- [x] **Step 1: Move the code**
 
 `render.js` takes `el`, `text`, `hasReward`, `payoffSummary`, `treeNodeKind`, `shapeForKind`, `haloForKind`, `treeTrimRadius`, `truncateLabel`, `pLabelText`, `buildDefs`, `renderMarkovEdge`, `renderMarkovNode`, `renderMarkov`, `renderTreeEdge`, `renderTreeNode`, `renderTree`, `buildSvg`. `index.js` takes everything else. No behaviour change in this step — get the suite green and the app rendering before touching anything.
 
-- [ ] **Step 2: Add the edge hit layer**
+- [x] **Step 2: Add the edge hit layer**
 
 In `renderMarkovEdge` and `renderTreeEdge`, prepend an invisible wide path with the same `d`, **before** the visible line so it never covers the arrowhead:
 
@@ -738,7 +738,7 @@ and in `css/canvas.css`:
 }
 ```
 
-- [ ] **Step 3: Add the node hit layer for shapes with no fill**
+- [x] **Step 3: Add the node hit layer for shapes with no fill**
 
 `shapeForKind('terminal')` returns a bare `<line>`. Give the terminal (and only the terminal — every other kind has a paper fill that already carries its own hit area) a transparent rect sized from `geometry.hitShapeFor('terminal')`, appended first inside the node `<g>`:
 
@@ -755,11 +755,11 @@ if (kind === 'terminal') {
 #canvas .node-hit { fill: transparent; stroke: none; }
 ```
 
-- [ ] **Step 4: Replace `hitR` with `hit` throughout**
+- [x] **Step 4: Replace `hitR` with `hit` throughout**
 
 Every `nodeIndex.push({...})` in `renderMarkov`/`renderTree` carries `hit: hitShapeFor(kind)` instead of `hitR: NODE_R` / `hitR: treeTrimRadius(kind)`. `treeTrimRadius` stays — it is edge-path trimming, a different concern from hit-testing, and keeps its current values. `index.js`'s local `hitTestNode` is deleted and every caller switches to `pickNode(point, nodeIndex)` from `geometry.js`. Grep for `hitR` afterwards; there must be no hits left.
 
-- [ ] **Step 5: Verify in Chrome, then commit and push**
+- [x] **Step 5: Verify in Chrome, then commit and push**
 
 Run: `npm test` — PASS, all green.
 Serve (`python3 -m http.server 8000`) and **hard-reload** (Chrome caches `js/` aggressively). Open the HIV example: clicking anywhere along a transition arrow selects it, not just dead-centre. Open the surgery example: clicking a terminal bar selects it. Both were near-impossible before.
@@ -794,11 +794,11 @@ createGestures(svgEl, {
 // (`openContextMenu = () => {}`) so this task's app is complete on its own.
 ```
 
-- [ ] **Step 1: Delete the toolbar**
+- [x] **Step 1: Delete the toolbar**
 
 Remove `TOOL_DEFS`, `toolButtons`, `updateToolButtons`, `setTool`, the `tool` variable, `svgEl.setAttribute('data-tool', ...)`, the `k === 'v'|'a'|'c'|'d'` arm of the keydown handler, and the `#canvas[data-tool=...]` cursor rules in `css/canvas.css`. `escapeAll()` keeps cancelling the rename and the gesture and now also clears the selection. Drop `setTool` from `createCanvas`'s return object.
 
-- [ ] **Step 2: Implement the gesture state machine**
+- [x] **Step 2: Implement the gesture state machine**
 
 The pointer gesture carries `{target, startClientX, startClientY, startViewX, startViewY, moved, leftSource, pointerId, ghostNodeEl, ghostEdgeEl, grabDX, grabDY}`.
 
@@ -879,7 +879,7 @@ function endNodeGesture(g, cur, e) {
 
 - **Space latch** — a `keydown`/`keyup` pair on `document` sets `spaceHeld`, guarded by the existing `isTypingTarget` check and the `dialog[open]` early-return, and only claimed while a node gesture is in flight (so a bare Space press elsewhere is untouched). `e.preventDefault()` on keydown stops the page scrolling. Reset `spaceHeld = false` on `blur` and on `pointercancel`, or a lost keyup leaves the latch stuck.
 
-- [ ] **Step 3: Style the ghosts**
+- [x] **Step 3: Style the ghosts**
 
 ```css
 /* The real node never moves during a drag — a translucent clone follows the cursor instead, so
@@ -893,11 +893,11 @@ function endNodeGesture(g, cur, e) {
 #canvas .drop-ring .node-shape { stroke: var(--accent); stroke-width: 3; }
 ```
 
-- [ ] **Step 4: Verify every row of the gesture table in Chrome**
+- [x] **Step 4: Verify every row of the gesture table in Chrome**
 
 `npm test` — PASS. Then hard-reload and walk the table from the spec's §1: double-click empty creates; drag to empty moves (and snaps to the dot grid; ⌘ places freely); drag onto a node connects; drag out-and-back self-loops; Space-drag to empty creates-and-connects; ⌥-drag drops a node on top of another; the tree cases behave as the table says; the toast appears when a tree double-click has no parent selected.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 git add js/ui/canvas/ css/canvas.css
@@ -913,7 +913,7 @@ git push
 - Modify: `js/ui/canvas/index.js`, `index.html:29` (nothing structural — `#canvas-toolbar` already exists), `css/app.css`
 - Test: `fitBox`/`snapToGrid` already covered by Task 3. Verified in Chrome.
 
-- [ ] **Step 1: Fix the wheel**
+- [x] **Step 1: Fix the wheel**
 
 Today `wheel` zooms, so a two-finger trackpad scroll zooms the canvas. Split it:
 
@@ -931,7 +931,7 @@ svgEl.addEventListener('wheel', (e) => {
 }, { passive: false });
 ```
 
-- [ ] **Step 2: Add the four toolbar buttons**
+- [x] **Step 2: Add the four toolbar buttons**
 
 Into `#canvas-toolbar`, alongside `panels.js`'s existing maximize span (append as siblings — never clear that node). Each a real `<button type="button">` with `aria-label` and `title`:
 
@@ -951,15 +951,15 @@ function fitToView() {
 }
 ```
 
-- [ ] **Step 3: Wire the keyboard**
+- [x] **Step 3: Wire the keyboard**
 
 In the existing document keydown handler, after the `dialog[open]` and `isTypingTarget` guards, and only when `e.metaKey || e.ctrlKey`: `0` → `fitToView()`, `=`/`+` → zoom in, `-` → zoom out, each with `preventDefault()`. Every other meta/ctrl chord still returns early untouched, so `⌘Z`/`⌘Y` undo/redo in `app.js` keep working.
 
-- [ ] **Step 4: Verify in Chrome**
+- [x] **Step 4: Verify in Chrome**
 
 `npm test` — PASS. Hard-reload: two-finger scroll pans; pinch and ⌘-scroll zoom to the cursor; the four buttons work; ⌘0 frames the whole model after panning off into empty space; Tidy returns dragged nodes to the auto-layout.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 git add js/ui/canvas/ css/app.css
@@ -975,7 +975,7 @@ git push
 - Modify: `js/ui/canvas/index.js`
 - Test: verified in Chrome.
 
-- [ ] **Step 1: Extend the keydown handler**
+- [x] **Step 1: Extend the keydown handler**
 
 Keep the existing order — `dialog[open]` early-return, then `isTypingTarget`, then Escape, then Delete/Backspace, then the meta/ctrl arm from Task 6 — and add below it, for the current selection only when `sameModelPath(selection.modelPath, currentModelPath)`:
 
@@ -983,11 +983,11 @@ Keep the existing order — `dialog[open]` early-return, then `isTypingTarget`, 
 - `ArrowUp/Down/Left/Right` → `flush()`, then one `setLayout` op moving the node by `GRID` (`GRID * 4` with Shift). One op per keypress = one undo entry per nudge, which is the right granularity for a deliberate key press.
 - `Escape` → already cancels the rename and the gesture; it now also clears the selection when there is nothing to cancel.
 
-- [ ] **Step 2: Verify in Chrome**
+- [x] **Step 2: Verify in Chrome**
 
 `npm test` — PASS. Hard-reload: arrows nudge the selected node by one grid step, ⇧+arrow by four; Enter opens the inline rename; Escape backs out; none of it fires while typing in the YAML pane or a sidebar field; ⌘Z undoes a nudge.
 
-- [ ] **Step 3: Commit and push**
+- [x] **Step 3: Commit and push**
 
 ```bash
 git add js/ui/canvas/
@@ -1012,11 +1012,11 @@ Replaces the deleted Delete tool.
 openContextMenu(x, y, items) -> void   // items: [{label, action, disabled?}] — a null entry is a separator
 ```
 
-- [ ] **Step 1: Build the menu**
+- [x] **Step 1: Build the menu**
 
 A plain absolutely-positioned `<div class="ctx-menu" role="menu">` appended to `document.body`, each item a real `<button role="menuitem">`. Closes on Escape, on any outside `pointerdown`, on scroll, and after any item runs. Flips left/up when it would overflow the viewport. **No `window.confirm` anywhere** — deleting from the menu is undoable, which is the confirmation.
 
-- [ ] **Step 2: Wire the three targets**
+- [x] **Step 2: Wire the three targets**
 
 `contextmenu` handlers call `e.preventDefault()`, select the target first (so the menu always acts on something visibly highlighted), then open:
 
@@ -1026,11 +1026,11 @@ A plain absolutely-positioned `<div class="ctx-menu" role="menu">` appended to `
 
 There is deliberately no Duplicate: a collision-safe subtree copy is a third new op nobody asked for.
 
-- [ ] **Step 3: Verify in Chrome**
+- [x] **Step 3: Verify in Chrome**
 
 `npm test` — PASS. Hard-reload: right-click each of the three targets; every item does what it says; the menu never escapes the viewport; Escape and an outside click both close it; ⌘Z undoes a menu delete.
 
-- [ ] **Step 4: Commit and push**
+- [x] **Step 4: Commit and push**
 
 ```bash
 git add js/ui/canvas/ css/app.css
@@ -1075,7 +1075,7 @@ attachFindings(rows, findings) -> {
 }
 ```
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```js
 // test/outline-build.test.js
@@ -1208,12 +1208,12 @@ test('counts roll descendants up into their ancestors', () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test test/outline-build.test.js`
 Expected: FAIL — `Cannot find module '../js/ui/outline/build.js'`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Group order is fixed: `structure`, `submodels` (omitted when `model.models` is empty), `parameters`, `settings`. Check-path ownership per row kind, all prefixed with `scopePrefix(modelPath)`:
 
@@ -1227,12 +1227,12 @@ Group order is fixed: `structure`, `submodels` (omitted when `model.models` is e
 
 `attachFindings` sorts every row's `checkPaths` by descending length once, then for each finding takes the first row whose path is an exact match or a `path + '.'` prefix; `counts` is built by walking `parentId` upward from each owning row.
 
-- [ ] **Step 4: Run the full suite**
+- [x] **Step 4: Run the full suite**
 
 Run: `npm test`
 Expected: PASS, including the repointed `test/inspector-match.test.js`.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 git add js/ui/outline/ test/outline-build.test.js js/ui/inspector.js test/inspector-match.test.js
@@ -1254,7 +1254,7 @@ Replaces the three-tab inspector. The largest task; it lands in one piece becaus
 - Consumes: `buildOutline`, `filterRows` (Task 9); `scopedStoreFor` (Task 1).
 - Produces: `createInspector(rootEl, headEl, store, {flush, openScope}) -> {render, revealSelection}` — `setActiveTab` is gone, and `openScope` is new. A row click has to drill the canvas into the row's sub-model scope before selecting, but inspector.js holds no canvas reference — importing one would rebuild exactly the backwards peer dependency Task 1 exists to remove. So `app.js` injects `canvas.openScope` (it constructs the canvas at line 225, before the inspector at line 230). Default it to a no-op.
 
-- [ ] **Step 1: Build the shell**
+- [x] **Step 1: Build the shell**
 
 `#inspector-tabs` is the pane's `.panel-head` and `panels.js` writes its own `.panel-ctl` span into it: append as a sibling, never clear it. The head gains the static text `Model`, so the `#pane-inspector[data-min] .panel-head::before` rule at `css/app.css:293-296` — which existed only to fake a label in the minimized state — is deleted.
 
@@ -1310,27 +1310,27 @@ function outlineRow(row, { expanded, hasChildren, collapsed }) {
 .otl-fields { padding-left: calc(var(--sp-2) + (var(--depth) + 1) * 14px); }
 ```
 
-- [ ] **Step 2: Expansion and field editors**
+- [x] **Step 2: Expansion and field editors**
 
 Exactly one row is expanded at a time: the selected one. Its editors render into a `<div class="otl-fields">` inserted directly after its row, indented one level further. The existing field builders are reused **unchanged** — `renderStateFields`, `renderEdgeFields`, `renderNodeFields`, `fieldRow`, `wireCommit`, `wireExprInput`, `makeCommitter`, `keyValueEditor`, `kvRow`, `appendNameField`, `appendNumberField`, `appendTextSettingField`. Only `paramRow` is rewritten: it was a `<tr>` of seven `<td>`s and becomes the same five fields (`value`, `low`, `high`, `dist`, `source`) as vertical `fieldRow`s plus the delete button. Group headers toggle collapse independently of selection.
 
 Scope: STRUCTURE rows edit through `scopedStoreFor(store, row.sel.modelPath)`; PARAMETERS and SETTINGS always edit the top-level store.
 
-- [ ] **Step 3: Selection sync and persistence**
+- [x] **Step 3: Selection sync and persistence**
 
 `revealSelection()` — expand the selected row, expand any collapsed group above it, `scrollIntoView({block: 'nearest'})`. Clicking a row calls `openScope(row.sel.modelPath)` **before** `store.select(row.sel)` — the same ordering `app.js:242-249` already depends on, so the canvas halo's `sameModelPath` check sees the right scope. In `app.js`, `selectOnCanvas`'s third line becomes `inspector.revealSelection();`.
 
 Persist the collapsed-group set and the last filter string through `panels.js`'s existing read-merge-write `saveLayout` pattern, replacing the now-dead `tab` key.
 
-- [ ] **Step 4: Preserve render discipline**
+- [x] **Step 4: Preserve render discipline**
 
 `shouldSkipRender` stays exactly as it is — skip the structural rebuild while focus is on a real input inside `rootEl`, with the one exception that a selection deleted out from under the user forces an immediate reconcile. Extend `render()` to capture `rootEl.scrollTop` and the expanded/collapsed set before `replaceChildren()` and restore both after. Without this the panel visibly jumps on every keystroke that reaches the store.
 
-- [ ] **Step 5: Verify in Chrome**
+- [x] **Step 5: Verify in Chrome**
 
 `npm test` — PASS. Hard-reload and check: every state, edge, tree node, parameter and sub-model appears; the filter narrows and keeps ancestors; clicking a row selects on canvas and vice versa; every field still commits (payoffs, `p`, cost/utility, delay, sub-model, `with`, all five parameter fields, every setting); the parameter name field is finally readable; typing in a field never gets interrupted by a rebuild; scroll position holds; a sub-model row drills the canvas in.
 
-- [ ] **Step 6: Commit and push**
+- [x] **Step 6: Commit and push**
 
 ```bash
 git add js/ui/inspector.js js/ui/app.js css/app.css index.html
@@ -1346,21 +1346,21 @@ git push
 - Modify: `js/ui/inspector.js`, `css/app.css`
 - Test: `attachFindings` already covered by Task 9. Verified in Chrome.
 
-- [ ] **Step 1: Render the dots**
+- [x] **Step 1: Render the dots**
 
 Keep the existing 300ms-debounced `check()` and the DOM-patch-not-rebuild discipline: `applyFindingsToDom` must never trigger a structural render, or it will steal focus from a field being typed into. For each row, `attachFindings(rows, latestFindings)` gives `byRow` (a dot on the row: `--danger` when any finding is an error, `--warn` otherwise) and `counts` (a count on group headers). The dot carries `role="img"` and an `aria-label` of the joined messages, not merely a `title` — it sits as a non-focusable `<span>` inside the row's `<button>`, and a bare `title` there is not part of the button's accessible-name computation, so a keyboard or screen-reader user would get no signal at all that the row has a finding. Keep the `title` too, for the mouse.
 
 `paintFindings` must not clear a field-error slot that a *local* validator currently owns. The same `err` elements are written synchronously by `wireExprInput` on every keystroke and by a rejected commit, both reflecting the **uncommitted** value — while `check()` reflects the committed store. Without an ownership flag, any unrelated store change within the 300ms debounce erases a live "unexpected end of expression" message while the input keeps its red border, leaving the problem visible and its explanation gone. Findings whose path matches a field currently rendered inside the expanded row still show inline beneath that field via the existing `fieldSlots` mechanism. `residual` renders in a `Model findings` list pinned at the bottom of the outline — nothing is swallowed.
 
-- [ ] **Step 2: Wire the toggle**
+- [x] **Step 2: Wire the toggle**
 
 The `Only findings` button in the filter bar composes with the text filter: apply `filterRows` first, then keep only rows that have findings themselves or an ancestor relationship to one (reuse `counts`, which already rolls descendants up). Its `aria-pressed` reflects the state.
 
-- [ ] **Step 3: Verify in Chrome**
+- [x] **Step 3: Verify in Chrome**
 
 `npm test` — PASS. Hard-reload, break something (a bad expression in a `p`, a row that does not sum to 1, an unknown parameter name): the dot lands on the right row, the group header counts it, `Only findings` narrows to it, and clicking through gets you to the field. The Validation tab's click-through still lands on the right row via `revealSelection`.
 
-- [ ] **Step 4: Commit and push**
+- [x] **Step 4: Commit and push**
 
 ```bash
 git add js/ui/inspector.js css/app.css
@@ -1375,15 +1375,15 @@ git push
 **Files:**
 - Modify: `README.md` (the editor section), `docs/superpowers/plans/2026-08-24-editor-rework.md` (tick every box)
 
-- [ ] **Step 1: Update the README**
+- [x] **Step 1: Update the README**
 
 Replace the four-tool description with the gesture table from the spec's §1, the new view controls, and the outline sidebar. Anything describing Select/Add/Connect/Delete or the Selection/Parameters/Settings tabs is now wrong — grep for `tool`, `Selection tab`, `Parameters tab` and fix every hit.
 
-- [ ] **Step 2: Full-suite and cross-browser smoke**
+- [x] **Step 2: Full-suite and cross-browser smoke**
 
 `npm test` — every test green. Then in Chrome, on both `examples/hiv.yaml` (markov) and `examples/surgery.yaml` (tree): build a small model from scratch using only canvas gestures, run it, confirm the results drawer still works, undo back to the start, redo forward. Then check the YAML pane round-trips everything the new gestures produced, and that the Validation tab's click-through still selects and reveals. Repeat the pointer gestures once in Safari and once in Firefox — pointer capture and `contextmenu` differ between engines and this round leans on both.
 
-- [ ] **Step 3: Deploy and confirm live**
+- [x] **Step 3: Deploy and confirm live**
 
 ```bash
 netlify deploy --prod --dir . --site 4c526e64-937b-4c3a-a548-f701d9804a56
@@ -1391,7 +1391,7 @@ netlify deploy --prod --dir . --site 4c526e64-937b-4c3a-a548-f701d9804a56
 
 Hard-reload `https://econeval.netlify.app` and repeat the smoke walk against production — `js/` is cached aggressively, so a soft reload can show the old bundle and hide a broken deploy.
 
-- [ ] **Step 4: Commit and push**
+- [x] **Step 4: Commit and push**
 
 ```bash
 git add README.md docs/superpowers/plans/2026-08-24-editor-rework.md

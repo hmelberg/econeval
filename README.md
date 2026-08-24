@@ -1,21 +1,26 @@
 # econeval
 
 Health economic evaluation in the browser: decision trees and Markov models with a
-declarative YAML model format. Spec: `docs/superpowers/specs/2026-08-23-econeval-design.md`.
+declarative YAML model format. Format/engines/analyses spec:
+`docs/superpowers/specs/2026-08-23-econeval-design.md`; editor spec (canvas gestures + outline
+sidebar): `docs/superpowers/specs/2026-08-24-econeval-editor-design.md`.
 
-Status: phase 1 (compute core), phase 2 (editor), and phase 3 (results) are all complete,
-covered by `npm test` (388 tests), including two golden examples cross-checked against
-independent reference implementations (`test/golden.test.js`). The editor is a browser-based
-canvas + YAML editor for the same model format the compute core runs:
+Status: phase 1 (compute core), phase 2 (editor), phase 3 (results), and the editor rework
+are all complete, covered by `npm test` (473 tests), including two golden examples
+cross-checked against independent reference implementations (`test/golden.test.js`). The
+editor is a browser-based canvas + YAML editor for the same model format the compute core
+runs:
 
 - **Two-way YAML sync** — a live document store (undo/redo, selection) with a debounced YAML
-  textarea; edits from either side (canvas, inspector, or hand-typed YAML) stay in sync, and
+  textarea; edits from either side (canvas, outline, or hand-typed YAML) stay in sync, and
   a broken YAML edit shows an inline error (line + hint) without losing canvas state.
 - **Publication-figure canvas** — auto-layout markov rings and tidy decision trees, drawn as
-  ink-stroke nodes on a dot-grid paper ground; pan/zoom, drag-to-move, and Select/Add/
-  Connect/Delete gesture tools, including sub-model drill-in with a breadcrumb trail.
-- **Inspector** — Selection/Parameters/Settings tabs with inline expression validation and
-  live `check()` findings (a tab-strip badge plus per-field and whole-model messages).
+  ink-stroke nodes on a dot-grid paper ground. The canvas is modeless: every gesture below is
+  always live, there is no tool to pick first. Sub-model drill-in works through a breadcrumb
+  trail.
+- **Outline sidebar** — one filterable outline of the whole document (Structure/Sub-models/
+  Parameters/Settings), replacing a three-tab inspector, with inline expression validation and
+  live `check()` findings shown as dots on the offending row.
 - **Results** — a Run button (or Ctrl/Cmd+Enter) computes CEA/Trace/Tornado/PSA/Validation
   into a drawer at the bottom of the workspace; see Analyses below for what each tab shows.
   A stale banner appears the moment the model changes underneath a computed result.
@@ -27,9 +32,10 @@ canvas + YAML editor for the same model format the compute core runs:
 - Light/dark theme follows the OS preference (or an explicit `data-theme` override); charts
   re-theme in place when it changes.
 
-Run `npm test` for the full suite (phase 1's compute core, phase 2's editor, and phase 3's
-results layer — DOM-free logic and pure-function coverage for the DOM-heavy modules; chart
-rendering itself is verified by recorded browser passes, not unit tests).
+Run `npm test` for the full suite (phase 1's compute core, phase 2's editor, phase 3's
+results layer, and the editor rework's gesture/outline logic — DOM-free logic and
+pure-function coverage for the DOM-heavy modules; chart rendering and pointer gestures
+themselves are verified by recorded browser passes, not unit tests).
 
 ## Run locally
 
@@ -49,6 +55,64 @@ https://econeval.netlify.app
 
 Pending: custom domain `econeval.melberg.app` (Netlify dashboard work — DNS is not touched
 by this repo's tooling).
+
+## Editing on the canvas
+
+The canvas has no tools and no modes — there's nothing to pick before you act, just gestures.
+A drag from a node is resolved at **drop**: the real node never moves while you drag it, a
+translucent clone follows the cursor instead, and where you release decides what happens.
+Release over empty space and it's a move; release over another node and it's a connection (a
+Markov transition, or a tree re-parent).
+
+| Gesture | Markov | Tree |
+|---|---|---|
+| Click empty | deselect | deselect |
+| Double-click empty | new state at that point | new child of the selected node, at that point; toast if nothing is selected |
+| Click object | select — halo on canvas, row expands in the outline | same |
+| Double-click node | inline rename; on a sub-model node, drill into it | same |
+| Drag node → empty | move it | move it |
+| Drag node → another node | transition A→B | A and its subtree become a child of B |
+| Drag node → leave its own area and return | self-loop A→A | no-op |
+| Space + drag → empty | new state there **and** an edge to it | new child there |
+| Space + drag → node | edge (never a move) | re-parent |
+| ⌥ + drag | force move — permits dropping a node on top of another | same |
+| ⌘ + drag | ignore grid snap, place freely | same |
+| Drag background | pan | pan |
+| Right-click object | context menu | context menu |
+| Delete / Backspace | delete selection | delete selection |
+| Escape | cancel gesture / rename, else deselect | same |
+| Enter | inline rename of the selection | same |
+| Arrows (⇧ = larger step) | nudge the selected node | same |
+
+**Right-click** opens a context menu — node, edge, and empty canvas each get their own items
+(delete, rename, tidy position, add child/sibling in a tree, enter a sub-model, and so on).
+It's the mouse route to deletion now that there's no Delete tool.
+
+**View controls.** The wheel / two-finger scroll pans; ⌘-scroll (or trackpad pinch) zooms
+toward the cursor. Four corner buttons on the canvas: zoom out, zoom in, **Fit to view** (frame
+every node), and **Tidy** (clears hand-placed positions so the auto-layout takes over again —
+whole model from the button, a single node from its context menu). Keyboard: **⌘0** fits,
+**⌘+**/**⌘−** zoom.
+
+## The outline sidebar
+
+The sidebar is one filterable outline of the whole document, not a set of tabs. A search box
+at the top filters rows by name; an "Only findings" toggle narrows it to rows with a
+validation problem. Four collapsible groups:
+
+- **STRUCTURE** — every state (Markov) or the tree itself (decision tree), in the canvas's
+  current scope, with a Markov state's outgoing transitions nested beneath it.
+- **SUB-MODELS** — one row per sub-model attachment; clicking one drills the canvas into it,
+  so this group is a map of the whole document even when the canvas is showing one part of it.
+- **PARAMETERS** — one row per parameter.
+- **SETTINGS** — the model's top-level settings.
+
+Selecting any row expands its fields indented beneath it, label above a full-width input.
+Validation findings from `check()` show as a dot on the offending row, with counts rolling up
+to that row's group header; a finding that doesn't match any row still lists at the bottom, so
+nothing is ever silently dropped. Selection is synced both ways: clicking on the canvas
+scrolls to and expands the matching outline row, and clicking a row selects and reveals the
+matching object on the canvas (drilling into its sub-model scope first if needed).
 
 ## Model format at a glance
 
@@ -182,7 +246,7 @@ Press **Run** to compute results into the drawer at the bottom of the workspace,
   sub-model's own dist-bearing params draw independently per attachment (route through a
   global param via `with:` to share them).
 - **Validation** — every `check()` finding, errors and warnings, each one clickable to
-  select the offending state/branch/param on the canvas and focus it in the inspector.
+  select the offending state/branch/param on the canvas and reveal it in the outline sidebar.
 
 A stale banner ("Results are stale — Run again.") appears the moment the model changes
 underneath a computed result — CEA/Trace and PSA are tracked independently, so editing the
