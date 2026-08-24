@@ -426,8 +426,15 @@ button:active {
   font-size: var(--fs-0); color: var(--muted);
   text-transform: uppercase; letter-spacing: .04em;
 }
-.otl-row[aria-current="true"] { background: var(--accent-soft); }
-.otl-row:hover { background: var(--accent-soft); }
+/* Review fix (Important, Task 10 review, controller's own patch): selection and hover must not
+   look alike, or a merely-hovered row reads as the selected one. Selection keeps the accent tint
+   AND gains an accent edge; hover is a plainer surface tint. */
+.otl-row[aria-current="true"] {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.otl-row:hover { background: var(--line); }
+.otl-row[aria-current="true"]:hover { background: var(--accent-soft); }
 .otl-twisty { width: 10px; color: var(--muted); }
 .otl-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .otl-detail { font-family: var(--font-data); font-size: var(--fs-0); color: var(--muted); }

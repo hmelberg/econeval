@@ -380,6 +380,33 @@ export function rowForSelection(rows, selection) {
   return null;
 }
 
+// Shared ancestor-chain walk: given a prebuilt id->Row map and a starting parentId, returns every
+// ancestor id from the immediate parent up to the root, in that order. Both collapseFilter and the
+// exported ancestorIds below are this exact walk — collapseFilter just builds the map once (per
+// call, not per row) for O(rows) construction rather than O(rows) map-builds, since it needs the
+// walk for every row; ancestorIds is the single-row public form the DOM layer's revealSelection
+// uses (js/ui/inspector.js) to name which of a row's ancestors are currently collapsed.
+function walkAncestors(byId, parentId) {
+  const out = [];
+  let pid = parentId;
+  while (pid) {
+    out.push(pid);
+    pid = byId.get(pid)?.parentId ?? null;
+  }
+  return out;
+}
+
+/**
+ * ancestorIds(rows, row) -> string[]
+ *
+ * `row`'s ancestor chain, immediate parent first, walking parentId up to the root. [] for a
+ * root-level row (a group header, or any row whose parentId is null).
+ */
+export function ancestorIds(rows, row) {
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  return walkAncestors(byId, row.parentId);
+}
+
 /**
  * collapseFilter(rows, collapsedIds) -> Row[]
  *
@@ -390,14 +417,26 @@ export function rowForSelection(rows, selection) {
  */
 export function collapseFilter(rows, collapsedIds) {
   const byId = new Map(rows.map((r) => [r.id, r]));
-  return rows.filter((row) => {
-    let pid = row.parentId;
-    while (pid) {
-      if (collapsedIds.has(pid)) return false;
-      pid = byId.get(pid)?.parentId ?? null;
-    }
-    return true;
-  });
+  return rows.filter((row) => !walkAncestors(byId, row.parentId).some((id) => collapsedIds.has(id)));
+}
+
+/**
+ * addAfterIndex(visibleRows, groupId, collapsedIds) -> number
+ *
+ * Where an "add a new child" button for `groupId` belongs in `visibleRows` (a row list already
+ * run through filterRows + collapseFilter): the index of the LAST visible row whose parentId is
+ * `groupId`, or — when the group currently has no visible children (none exist, or all were
+ * filtered out) — the index of the group's own header row instead, so the button still anchors
+ * somewhere sensible. Returns -1 when the group is collapsed (its children are hidden, so there is
+ * nothing for an "add" affordance to sit next to) or when the group isn't present in `visibleRows`
+ * at all (e.g. filtered out entirely) — both cases mean "don't show the button".
+ */
+export function addAfterIndex(visibleRows, groupId, collapsedIds) {
+  if (collapsedIds.has(groupId)) return -1;
+  for (let i = visibleRows.length - 1; i >= 0; i -= 1) {
+    if (visibleRows[i].parentId === groupId) return i;
+  }
+  return visibleRows.findIndex((r) => r.id === groupId);
 }
 
 // ================================================================================================

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { parseModel } from '../js/core/model.js';
 import {
   buildOutline, filterRows, attachFindings, rowForSelection, collapseFilter,
+  ancestorIds, addAfterIndex,
 } from '../js/ui/outline/build.js';
 
 const MARKOV = () => parseModel(`
@@ -277,4 +278,65 @@ test('collapseFilter: collapsing a state drops its own edges without touching si
 test('collapseFilter: an empty collapsed set returns every row unchanged', () => {
   const rows = buildOutline(MARKOV());
   assert.deepEqual(collapseFilter(rows, new Set()), rows);
+});
+
+// --- ancestorIds (Task 10 review, Finding 2: extracted from inspector.js's revealSelection) ---
+
+test('ancestorIds: an edge row -> [its state, group:structure], immediate parent first', () => {
+  const rows = buildOutline(MARKOV());
+  const edge = byId(rows, 'edge:well>dead');
+  assert.deepEqual(ancestorIds(rows, edge), ['state:well', 'group:structure']);
+});
+
+test('ancestorIds: a root-level row (no parent) -> []', () => {
+  const rows = buildOutline(MARKOV());
+  const group = byId(rows, 'group:structure');
+  assert.deepEqual(ancestorIds(rows, group), []);
+});
+
+test('ancestorIds: a param row -> [group:parameters]', () => {
+  const rows = buildOutline(MARKOV());
+  const param = byId(rows, 'param:c_well');
+  assert.deepEqual(ancestorIds(rows, param), ['group:parameters']);
+});
+
+test('ancestorIds: a deeply nested tree node walks every ancestor up to the group header', () => {
+  const rows = buildOutline(TREE());
+  const win = byId(rows, 'node:Root/A/Win');
+  assert.deepEqual(ancestorIds(rows, win), ['node:Root/A', 'node:Root', 'group:structure']);
+});
+
+// --- addAfterIndex (Task 10 review, Finding 2: extracted from inspector.js's render()) ---
+
+test('addAfterIndex: anchors after the LAST visible child of the group', () => {
+  const rows = buildOutline(MARKOV());
+  const idx = addAfterIndex(rows, 'group:parameters', new Set());
+  assert.equal(rows[idx].id, 'param:c_well');
+});
+
+test('addAfterIndex: falls back to the group header itself when it has no visible children', () => {
+  const noParams = parseModel(`
+econeval: 1
+type: markov
+name: m
+settings: {cycles: 1}
+states:
+  well: {cost: 0, utility: 1}
+transitions:
+  well: {well: 1}
+`);
+  const rows = buildOutline(noParams);
+  const idx = addAfterIndex(rows, 'group:parameters', new Set());
+  assert.equal(rows[idx].id, 'group:parameters');
+});
+
+test('addAfterIndex: a collapsed group returns -1 (its children are hidden, nothing to anchor to)', () => {
+  const rows = buildOutline(MARKOV());
+  assert.equal(addAfterIndex(rows, 'group:parameters', new Set(['group:parameters'])), -1);
+});
+
+test('addAfterIndex: a group filtered out of visibleRows entirely also returns -1', () => {
+  const rows = buildOutline(MARKOV());
+  const withoutParamsGroup = rows.filter((r) => r.id !== 'group:parameters' && r.parentId !== 'group:parameters');
+  assert.equal(addAfterIndex(withoutParamsGroup, 'group:parameters', new Set()), -1);
 });

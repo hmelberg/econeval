@@ -83,6 +83,7 @@ import { loadLayout, saveLayout } from './panels.js';
 import * as ops from './ops.js';
 import {
   buildOutline, filterRows, scopePrefix, nodePathToCheckPath, rowForSelection, collapseFilter,
+  ancestorIds, addAfterIndex,
 } from './outline/build.js';
 
 // ================================================================================================
@@ -162,6 +163,7 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
   let committingSelf = false;
   let fieldSlots = new Map(); // check-path -> error <div> element, from the last structural render (Task 11 will consume this; unused for now)
   let rowElements = new Map(); // row id -> its <button class="otl-row"> element, from the last render — used by revealSelection's scrollIntoView
+  let selectedFieldsEl = null; // the SELECTED ENTITY's own .otl-fields container from the last render (never Settings' — see buildRowFields/render()) — used by shouldSkipRender to scope its force-reconcile exception to what's actually focused, not just "some selection somewhere went stale"
   let pendingFocusEl = null; // a just-added blank kv-row's key input (or a newly added param's Name input), focused at the end of render()
   let pendingPayoffRef = { count: 0 };
   let pendingWithRef = { count: 0 };
@@ -215,18 +217,27 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
   // edit, undo/redo, ...) — a canvas-origin selection change must not be able to yank a field out
   // from under someone who's mid-typing elsewhere. Two cases still force an immediate render even
   // while typing:
-  //   - Not our own commit AND the entity the focused field belongs to (`renderedSelection`,
-  //     captured at the top of the last render()) is no longer resolvable — it was deleted out
-  //     from under the user (Delete tool, undo, a YAML edit...), so there is nothing sensible left
-  //     to keep showing; reconcile immediately instead of leaving an orphaned field on screen.
-  //     Reselecting a DIFFERENT-but-still-existing entity (e.g. clicking another canvas node) does
-  //     NOT trigger this — the field being edited is untouched, just no longer the active
+  //   - Not our own commit AND focus sits inside the SELECTED ENTITY'S OWN `.otl-fields` block
+  //     (`selectedFieldsEl`, captured at the end of the last render()) AND that entity
+  //     (`renderedSelection`) is no longer resolvable — it was deleted out from under the user
+  //     (Delete tool, undo, a YAML edit...), so there is nothing sensible left to keep showing;
+  //     reconcile immediately instead of leaving an orphaned field on screen. Review fix
+  //     (Important, Task 10 review): unlike the old three-tab inspector, a selected entity's
+  //     fields and the always-visible Settings fields can be on screen at once — checking only
+  //     "is renderedSelection resolvable" (with no check on what's actually focused) meant typing
+  //     in an unrelated Settings field, while some OTHER selected entity got deleted elsewhere,
+  //     would force-reconcile and yank focus out of the Settings field for no reason connected to
+  //     it. Scoping to `selectedFieldsEl.contains(active)` fixes that: only the field editor that
+  //     could actually be showing something orphaned gets force-reconciled. Reselecting a
+  //     DIFFERENT-but-still-existing entity (e.g. clicking another canvas node) does NOT trigger
+  //     this either way — the field being edited is untouched, just no longer the active
   //     selection, so it's left alone until its own blur reconciles it.
   //   - Focus isn't a typing target inside rootEl at all — nothing to protect.
   function shouldSkipRender() {
     const active = document.activeElement;
     if (!isTypingTarget(active) || !rootEl.contains(active)) return false;
     if (committingSelf) return true;
+    if (!selectedFieldsEl || !selectedFieldsEl.contains(active)) return true;
     return selectionResolvable(renderedSelection);
   }
 
@@ -795,11 +806,6 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
     return btn;
   }
 
-  function lastIndexWhere(arr, pred) {
-    for (let i = arr.length - 1; i >= 0; i -= 1) if (pred(arr[i])) return i;
-    return -1;
-  }
-
   // ---------- top-level render ----------
 
   function render() {
@@ -823,6 +829,7 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
 
     fieldSlots = new Map();
     rowElements = new Map();
+    selectedFieldsEl = null;
     rootEl.replaceChildren();
 
     const topModel = state.model;
@@ -843,15 +850,16 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
     const expandedRow = rowForSelection(allRows, state.selection);
     const expandedId = expandedRow ? expandedRow.id : null;
 
-    const paramsCollapsed = collapsedGroups.has('group:parameters');
-    let addParamAfterIndex = -1;
-    if (!paramsCollapsed) {
-      addParamAfterIndex = lastIndexWhere(visible, (r) => r.parentId === 'group:parameters');
-      if (addParamAfterIndex < 0) addParamAfterIndex = visible.findIndex((r) => r.id === 'group:parameters');
-    }
+    const addParamAfterIndex = addAfterIndex(visible, 'group:parameters', collapsedGroups);
 
     visible.forEach((row, i) => {
-      const hasChildren = allRows.some((r) => r.parentId === row.id);
+      // Review fix (Important, Task 10 review): only GROUP headers are individually collapsible
+      // (toggleCollapsed is only ever called for row.kind === 'group', below) — a markov state
+      // with edges, or a non-leaf tree node, has children in the `parentId` sense but clicking it
+      // always selects, never collapses. Gating hasChildren to group rows keeps the twisty/
+      // aria-expanded truthful: no permanent, non-functional "expanded" affordance on the
+      // majority of structural rows.
+      const hasChildren = row.kind === 'group' && allRows.some((r) => r.parentId === row.id);
       const collapsed = collapsedGroups.has(row.id);
       const expanded = row.kind !== 'group' && row.id === expandedId;
       const btn = outlineRow(row, { expanded, hasChildren, collapsed });
@@ -863,6 +871,10 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
         const fieldsEl = h('div', { class: 'otl-fields', style: `--depth:${row.depth}` });
         buildRowFields(fieldsEl, row, topModel);
         list.appendChild(fieldsEl);
+        // Settings' own fields block is never "the selected entity" (rowForSelection can never
+        // return the settings row — see build.js) — only mark it here for the actual selected row,
+        // so shouldSkipRender's force-reconcile exception stays scoped to it (Finding 3).
+        if (row.id === expandedId) selectedFieldsEl = fieldsEl;
       }
 
       if (i === addParamAfterIndex) list.appendChild(buildAddParamButton());
@@ -896,14 +908,9 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
     const allRows = buildOutline(state.model);
     const row = rowForSelection(allRows, state.selection);
     if (!row) return;
-    const byId = new Map(allRows.map((r) => [r.id, r]));
-    let pid = row.parentId;
-    let changed = false;
-    while (pid) {
-      if (collapsedGroups.has(pid)) { collapsedGroups.delete(pid); changed = true; }
-      pid = byId.get(pid)?.parentId ?? null;
-    }
-    if (changed) persistOutlineState();
+    const toUncollapse = ancestorIds(allRows, row).filter((id) => collapsedGroups.has(id));
+    for (const id of toUncollapse) collapsedGroups.delete(id);
+    if (toUncollapse.length > 0) persistOutlineState();
     render();
     const el = rowElements.get(row.id);
     if (el) el.scrollIntoView({ block: 'nearest' });

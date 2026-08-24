@@ -232,6 +232,22 @@ test('parseLayout: an invalid maximized value falls back to null', () => {
   assert.equal(parseLayout(bad).maximized, null);
 });
 
+// sanitizeOutline's own edge branches (Task 10 review, Finding 5) — mirrors the targeted coverage
+// sanitizePane/sanitizeResults already have above (the width-clamp and results-height tests).
+test('parseLayout: a non-object outline value recovers to defaults wholesale', () => {
+  const bad = JSON.stringify({ outline: 'not an object' });
+  assert.deepEqual(parseLayout(bad).outline, { collapsed: [], filter: '' });
+});
+
+test('parseLayout: non-string entries in outline.collapsed are dropped, not rejected wholesale; a non-string filter falls back to default', () => {
+  const mixed = JSON.stringify({
+    outline: { collapsed: ['group:parameters', 42, null, 'group:settings'], filter: 7 },
+  });
+  const parsed = parseLayout(mixed);
+  assert.deepEqual(parsed.outline.collapsed, ['group:parameters', 'group:settings']);
+  assert.equal(parsed.outline.filter, '');
+});
+
 // --- saveLayout/loadLayout over injected storage ---
 
 test('saveLayout writes under the documented localStorage key', () => {
