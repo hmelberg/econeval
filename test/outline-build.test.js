@@ -207,3 +207,12 @@ test('submodels group is omitted when models is empty or absent', () => {
   const submodelsGroup = byId(rows, 'group:submodels');
   assert.equal(submodelsGroup, undefined, 'submodels group should not exist when models is empty');
 });
+
+test('null p-value shows as empty string, matching render.js pLabelText convention', () => {
+  const model = MARKOV();
+  // Directly mutate the parsed model's transition entry to test the null case without requiring invalid YAML
+  model.transitions.well.to.dead.p = null;
+  const rows = buildOutline(model);
+  const edge = byId(rows, 'edge:well>dead');
+  assert.equal(edge.detail, '', 'null p-value should show as empty string');
+});
