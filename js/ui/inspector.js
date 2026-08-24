@@ -445,6 +445,16 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
       type: 'button', class: 'insp-remove-btn', title: 'Remove', 'aria-label': `Remove ${key || 'field'}`,
     }, '−');
 
+    // Review fix (Finding 6, Task 11 re-review): every non-error exit from this function must
+    // clearFieldOwned(err) — a PRIOR call here (or from commitVal, which shares the same `err`
+    // element) may have left it marked owned after a rejected commit, and unlike commitVal itself
+    // (which already clears on its own success branch), commitKey previously had no success branch
+    // that touched `err` at all in either arm: the isNew arm's `else if (pendingRef)`, the unchanged-
+    // key silent `return`, and the rename arm's own successful commit (no prior `else` existed for
+    // it) all fell through without clearing. Before the ownership flag existed this self-healed —
+    // paintFindings' old unconditional overwrite wiped the slot within 300ms regardless — so the gap
+    // was invisible; the flag is exactly what removed that safety net. `clearFieldOwned` is a no-op
+    // when nothing was ever marked, so calling it unconditionally on every non-error path is safe.
     function commitKey() {
       const newKey = keyInput.value.trim();
       if (!newKey) return;
@@ -456,18 +466,24 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
           err.textContent = e.message;
           keyInput.classList.add('insp-field-invalid');
           markFieldOwned(err);
-        } else if (pendingRef) {
-          pendingRef.count = Math.max(0, pendingRef.count - 1);
+        } else {
+          clearFieldOwned(err);
+          if (pendingRef) pendingRef.count = Math.max(0, pendingRef.count - 1);
         }
         return;
       }
-      if (newKey === key) return;
+      if (newKey === key) {
+        clearFieldOwned(err);
+        return;
+      }
       const e = commitFieldOp(targetStore, (m) => setOp(setOp(m, key, null), newKey, valInput.value));
       if (e) {
         err.hidden = false;
         err.textContent = e.message;
         keyInput.classList.add('insp-field-invalid');
         markFieldOwned(err);
+      } else {
+        clearFieldOwned(err);
       }
     }
 
