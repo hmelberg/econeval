@@ -14,10 +14,11 @@
 //    maximized: null|'yaml'|'canvas'|'inspector'|'results'}
 // nextLayoutState always spreads the incoming state as its base and only overwrites the field(s)
 // an action actually changes, so an extra field a caller has tacked on survives every dispatch
-// untouched. The DOM layer below relies on this: it carries a fourth field, `tab`, through the
-// same object so Task 11's active-inspector-tab selection persists in the same localStorage blob
-// (see the "Persistence" comment on initPanels for how the two writers stay out of each other's
-// way).
+// untouched. The DOM layer below relies on this: it carries a fourth field, `outline`, through the
+// same object so the outline sidebar's collapsed-group set and last filter string (Task 10)
+// persist in the same localStorage blob (see the "Persistence" comment on initPanels for how the
+// two writers stay out of each other's way). `outline` replaces a phase-3 `tab` field (the old
+// three-tab inspector's active tab) that Task 10's single-outline redesign made meaningless.
 //
 // Actions: {type:'drag', pane:'yaml'|'insp', dx}, {type:'toggle-yaml'},
 // {type:'drag-results', dy}, {type:'toggle-results'}, {type:'maximize', pane},
@@ -55,7 +56,7 @@ export function defaultLayoutState() {
     insp: { w: 300, min: false },
     results: { h: 300, open: false, min: false },
     maximized: null,
-    tab: 'selection',
+    outline: { collapsed: [], filter: '' },
   };
 }
 
@@ -174,6 +175,20 @@ function sanitizeResults(value, fallback, bounds) {
   return { h, open, min };
 }
 
+// The outline sidebar's own small bit of persisted state (Task 10): which group ids are
+// collapsed, and the last filter string typed. `collapsed` recovers to `fallback.collapsed`
+// wholesale unless it's an array (and is then filtered down to just its string entries — a stray
+// non-string entry from a hand-edited or future-schema blob is dropped rather than rejecting the
+// whole field); `filter` recovers field-by-field like every other leaf here.
+function sanitizeOutline(value, fallback) {
+  const src = (value && typeof value === 'object') ? value : {};
+  const collapsed = Array.isArray(src.collapsed)
+    ? src.collapsed.filter((x) => typeof x === 'string')
+    : fallback.collapsed;
+  const filter = typeof src.filter === 'string' ? src.filter : fallback.filter;
+  return { collapsed, filter };
+}
+
 const MAXIMIZED_VALUES = new Set([null, 'yaml', 'canvas', 'inspector', 'results']);
 
 // Normalizes anything object-shaped into the canonical 5-field layout blob, filling each missing
@@ -191,7 +206,7 @@ function sanitizeLayout(raw) {
     insp: sanitizePane(raw.insp, d.insp, PANE_BOUNDS.insp, false),
     results: sanitizeResults(raw.results, d.results, PANE_BOUNDS.results),
     maximized: MAXIMIZED_VALUES.has(raw.maximized) ? raw.maximized : null,
-    tab: typeof raw.tab === 'string' ? raw.tab : d.tab,
+    outline: sanitizeOutline(raw.outline, d.outline),
   };
 }
 
@@ -259,13 +274,14 @@ export function loadLayout(storage) {
 // NOT attach its own click handler to #btn-yaml — it only needs to call initPanels() once at
 // boot, same as it calls the other createXxx(...) constructors).
 //
-// Persistence: this module and Task 11's inspector.js both write the SAME localStorage blob (this
-// module owns yaml/insp/maximized; inspector.js owns `tab`). Every save here re-reads the current
-// `tab` from storage immediately before writing, so a tab change made elsewhere is never clobbered
-// by a later resize/maximize/minimize here. inspector.js should mirror this: load the full blob,
-// overwrite only `tab`, save the full blob back — so it never clobbers panel geometry either. Both
-// sides doing read-merge-write per discrete user gesture is safe because these are synchronous
-// localStorage calls on a single UI thread; there is no window for the two writers to race.
+// Persistence: this module and inspector.js both write the SAME localStorage blob (this module
+// owns yaml/insp/maximized; inspector.js owns `outline`). Every save here re-reads the current
+// `outline` from storage immediately before writing, so an outline change (a filter keystroke, a
+// group collapsed/expanded) made elsewhere is never clobbered by a later resize/maximize/minimize
+// here. inspector.js mirrors this: load the full blob, overwrite only `outline`, save the full
+// blob back — so it never clobbers panel geometry either. Both sides doing read-merge-write per
+// discrete user gesture is safe because these are synchronous localStorage calls on a single UI
+// thread; there is no window for the two writers to race.
 
 function toggleAttr(el, name, on) {
   if (on) el.setAttribute(name, '');
@@ -485,11 +501,12 @@ export function initPanels(root = document, { storage } = {}) {
   const yamlMinBtn = makeCtlButton('—', 'Minimize panel'); // —
   yamlCtl.append(yamlMaxBtn, yamlMinBtn);
 
-  // Inspector's panel-head (#inspector-tabs) has no pre-existing .panel-ctl in index.html (unlike
-  // yaml's) — Task 11 renders the tab buttons into #inspector-tabs itself. Mirroring yaml's shape
-  // by appending a sibling .panel-ctl span here (rather than mixing these buttons in with the tab
-  // buttons) is the most predictable thing for that later render() to coexist with: it should
-  // append/update tab buttons without clobbering this span's innerHTML wholesale.
+  // Inspector's panel-head (#inspector-tabs) carries its own static "Model" text (index.html) but
+  // no pre-existing .panel-ctl span (unlike yaml's) — appended here as a sibling, same shape as
+  // yaml's. inspector.js never touches #inspector-tabs at all (Task 10 replaced the old three-tab
+  // strip with the single outline; there is nothing left to render into the head), so there is no
+  // "coexist with a later render()" concern here any more — this span is simply the only content
+  // this element's JS-driven side ever gets.
   const inspHead = inspectorTabs;
   const inspCtl = document.createElement('span');
   inspCtl.className = 'panel-ctl';
@@ -514,8 +531,8 @@ export function initPanels(root = document, { storage } = {}) {
   let state = loadLayout(storage);
 
   function persist() {
-    const latest = loadLayout(storage); // don't clobber a `tab` written elsewhere since our last save
-    saveLayout({ ...state, tab: latest.tab }, storage);
+    const latest = loadLayout(storage); // don't clobber `outline` written elsewhere since our last save
+    saveLayout({ ...state, outline: latest.outline }, storage);
   }
 
   function render() {

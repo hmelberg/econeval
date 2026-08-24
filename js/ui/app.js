@@ -227,15 +227,18 @@ const canvas = createCanvas(document.getElementById('canvas'), store, {
   flush: sync.flush,
 });
 
+// Task 10: the inspector drills the canvas into a row's sub-model scope on click, but inspector.js
+// holds no canvas reference of its own (importing one would rebuild exactly the backwards peer
+// dependency scoped-store.js exists to remove) — so canvas.openScope is injected here instead.
 const inspector = createInspector(document.getElementById('inspector-body'), document.getElementById('inspector-tabs'), store, {
   flush: sync.flush,
+  openScope: canvas.openScope,
 });
 
 // selectOnCanvas: the Validation tab's click-through target (js/ui/results.js). Selects the entity
-// (store.select — the same call every canvas gesture/inspector picker already makes), then
-// switches the inspector to its Selection tab via the EXACT function its own tab button's click
-// handler calls (inspector.setActiveTab — saveLayout's read-merge-write persist + a render(), both
-// already implemented there; nothing duplicated here).
+// (store.select — the same call every canvas gesture/outline row click already makes), then
+// reveals it in the outline (inspector.revealSelection — expands its row, uncollapsing any
+// collapsed ancestor group, and scrolls it into view).
 const results = createResults(document.getElementById('pane-results'), store, {
   flush: sync.flush,
   plotly: window.Plotly,
@@ -245,7 +248,7 @@ const results = createResults(document.getElementById('pane-results'), store, {
     // own render sees the right scope by the time store.select's notification arrives just below.
     canvas.openScope(sel.modelPath ?? []);
     store.select(sel);
-    inspector.setActiveTab('selection');
+    inspector.revealSelection();
   },
 });
 

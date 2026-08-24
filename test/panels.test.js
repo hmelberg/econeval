@@ -190,7 +190,7 @@ test('serialize/parse round-trip: a well-formed state survives unchanged', () =>
   s = nextLayoutState(s, { type: 'toggle-yaml' });
   s = nextLayoutState(s, { type: 'drag', pane: 'yaml', dx: 45 });
   s = nextLayoutState(s, { type: 'minimize', pane: 'inspector' });
-  s = { ...s, tab: 'parameters' };
+  s = { ...s, outline: { collapsed: ['group:parameters'], filter: 'cost' } };
   const json = serializeLayout(s);
   assert.equal(typeof json, 'string');
   const parsed = parseLayout(json);
@@ -217,7 +217,7 @@ test('parseLayout: a partial blob keeps its given fields and fills only what is 
   assert.equal(parsed.yaml.w, 350);
   assert.equal(parsed.yaml.open, true);
   assert.equal(parsed.insp.w, 300); // default, since insp was absent
-  assert.equal(parsed.tab, 'selection'); // default, since tab was absent
+  assert.deepEqual(parsed.outline, { collapsed: [], filter: '' }); // default, since outline was absent
 });
 
 test('parseLayout: an out-of-range stored width is clamped back into bounds on load', () => {
@@ -250,7 +250,7 @@ test('saveLayout/loadLayout round-trip through injected storage', () => {
   const storage = fakeStorage();
   let s = defaultLayoutState();
   s = nextLayoutState(s, { type: 'maximize', pane: 'canvas' });
-  s = { ...s, tab: 'settings' };
+  s = { ...s, outline: { collapsed: ['group:settings'], filter: '' } };
   saveLayout(s, storage);
   assert.deepEqual(loadLayout(storage), s);
 });
@@ -382,11 +382,11 @@ test('minimize(results): toggles back off (un-minimizes) on a second call — th
 
 // --- serialize/parse round-trip includes results (required) ---
 
-test('serialize/parse round-trip: results survives unchanged alongside yaml/insp/tab', () => {
+test('serialize/parse round-trip: results survives unchanged alongside yaml/insp/outline', () => {
   let s = defaultLayoutState();
   s = nextLayoutState(s, { type: 'toggle-results' });
   s = nextLayoutState(s, { type: 'drag-results', dy: -50 });
-  s = { ...s, tab: 'parameters' };
+  s = { ...s, outline: { collapsed: ['group:parameters'], filter: 'x' } };
   const json = serializeLayout(s);
   const parsed = parseLayout(json);
   assert.deepEqual(parsed, s);
@@ -411,7 +411,7 @@ test('parseLayout: a phase-2 blob without a results field parses results to defa
     yaml: { w: 320, open: true, min: false },
     insp: { w: 280, min: false },
     maximized: null,
-    tab: 'parameters',
+    tab: 'parameters', // a pre-Task-10 field, no longer part of the schema — simply ignored
   });
   const parsed = parseLayout(phase2Blob);
   assert.notEqual(parsed, null);
@@ -420,7 +420,8 @@ test('parseLayout: a phase-2 blob without a results field parses results to defa
   assert.equal(parsed.yaml.w, 320);
   assert.equal(parsed.yaml.open, true);
   assert.equal(parsed.insp.w, 280);
-  assert.equal(parsed.tab, 'parameters');
+  // the dead `tab` field is dropped, not carried through; outline recovers to its own defaults
+  assert.deepEqual(parsed.outline, defaultLayoutState().outline);
 });
 
 test('loadLayout: a phase-2 blob (no results key) in storage loads with results defaulted', () => {
@@ -429,7 +430,7 @@ test('loadLayout: a phase-2 blob (no results key) in storage loads with results 
     yaml: { w: 300, open: false, min: false },
     insp: { w: 300, min: false },
     maximized: null,
-    tab: 'selection',
+    tab: 'selection', // a pre-Task-10 field, no longer part of the schema — simply ignored
   });
   storage.setItem(LAYOUT_KEY, phase2Blob);
   const loaded = loadLayout(storage);

@@ -327,6 +327,80 @@ export function attachFindings(rows, findings) {
 }
 
 // ================================================================================================
+// ---------- Row selection (view helpers, Task 10) ----------
+// ================================================================================================
+
+function sameModelPath(a, b) {
+  const x = a ?? [];
+  const y = b ?? [];
+  if (x.length !== y.length) return false;
+  for (let i = 0; i < x.length; i += 1) if (x[i] !== y[i]) return false;
+  return true;
+}
+
+// A Row's `sel.id` is either a bare string (state/param), an array of names (a tree node's
+// root-inclusive path), or {from, to} (an edge) — never anything deeper. Plain shallow equality
+// covers all three shapes without needing a general deep-equal.
+function idsEqual(a, b) {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((v, i) => v === b[i]);
+  }
+  if (a && b && typeof a === 'object' && typeof b === 'object') {
+    return a.from === b.from && a.to === b.to;
+  }
+  return false;
+}
+
+/**
+ * rowForSelection(rows, selection) -> Row | null
+ *
+ * Finds the row a store selection ({kind, id, modelPath}) corresponds to. Matches row.sel by
+ * (kind, id, modelPath) for canvas-facing rows (state/edge/node). Param rows carry sel:null
+ * (params are not canvas entities — buildOutline never hands one to store.select), but the
+ * outline still drives a param row's expansion through the very same store.select mechanism (the
+ * DOM layer synthesizes {kind:'param', id: name, modelPath: []} on a param row click, reusing
+ * store.js's existing 'param' selection-validity support rather than inventing a second, parallel
+ * local-selection concept) — so a {kind:'param'} selection falls back to matching a param row by
+ * name.
+ */
+export function rowForSelection(rows, selection) {
+  if (!selection || selection.kind == null) return null;
+  const modelPath = selection.modelPath ?? [];
+  for (const row of rows) {
+    if (!row.sel) continue;
+    if (row.sel.kind !== selection.kind) continue;
+    if (!sameModelPath(row.sel.modelPath, modelPath)) continue;
+    if (idsEqual(row.sel.id, selection.id)) return row;
+  }
+  if (selection.kind === 'param' && modelPath.length === 0) {
+    return rows.find((r) => r.kind === 'param' && r.label === selection.id) ?? null;
+  }
+  return null;
+}
+
+/**
+ * collapseFilter(rows, collapsedIds) -> Row[]
+ *
+ * Drops every row whose ancestor chain (walking parentId) passes through a collapsed id.
+ * collapsedIds only ever holds group-row ids in the DOM layer (only group headers are
+ * individually collapsible there), but this walks the general parentId chain rather than
+ * checking `kind`, so it composes correctly with any future collapsible row too.
+ */
+export function collapseFilter(rows, collapsedIds) {
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  return rows.filter((row) => {
+    let pid = row.parentId;
+    while (pid) {
+      if (collapsedIds.has(pid)) return false;
+      pid = byId.get(pid)?.parentId ?? null;
+    }
+    return true;
+  });
+}
+
+// ================================================================================================
 // ---------- Helpers ----------
 // ================================================================================================
 

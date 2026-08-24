@@ -290,15 +290,6 @@ button:active {
 .panel[data-min] .panel-head > * {
   display: none;
 }
-/* Inspector's panel-head (#inspector-tabs) has no static text of its own — supply the strip
-   label from CSS so it doesn't depend on whatever Task 11 renders inside it. */
-#pane-inspector[data-min] .panel-head::before {
-  content: "Inspector";
-  font-size: var(--fs-1);
-  color: var(--muted);
-  letter-spacing: .04em;
-}
-
 /* #pane-results is a bottom drawer, not a side panel — its minimized strip stays a normal
    horizontal bar (own literal "Results" text, like yaml's) rather than the vertical-rl rotated
    text the side panels use above; only height/orientation are overridden, not the [data-min]
@@ -390,58 +381,85 @@ button:active {
   font-size: var(--fs-2);
 }
 
-/* Tab strip (js/ui/inspector.js's #insp-tabs-own, inserted as the first child of #inspector-tabs
-   — panels.js's own .panel-ctl maximize/minimize span is the OTHER child; space-between puts tabs
-   on the left, panel controls on the right, regardless of which module wires up first). */
-.insp-tabstrip {
+/* Outline filter bar (js/ui/inspector.js's buildFilterBar(), rebuilt as the first child of
+   #inspector-body on every render — negative margins cancel #inspector-body's own padding so the
+   bar spans edge to edge and `position: sticky` pins it flush at the pane's true top while the
+   row list scrolls beneath it). */
+.otl-filterbar {
+  position: sticky;
+  top: calc(var(--sp-3) * -1);
+  z-index: 1;
   display: flex;
   align-items: center;
-  height: 100%;
-  gap: 2px;
-  margin-left: calc(var(--sp-3) * -1);
+  gap: var(--sp-2);
+  margin: calc(var(--sp-3) * -1) calc(var(--sp-3) * -1) var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+.otl-filter-input {
+  flex: 1;
   min-width: 0;
-  overflow: hidden;
 }
-.insp-tab {
-  border: none;
-  border-bottom: 2px solid transparent;
-  border-radius: 0;
-  background: transparent;
-  padding: 0 var(--sp-2);
-  height: 100%;
-  font-size: var(--fs-1);
-  text-transform: none;
-  letter-spacing: normal;
-  color: var(--muted);
+.otl-only-findings {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-size: var(--fs-0);
+  padding: var(--sp-1) var(--sp-2);
 }
-.insp-tab:hover {
-  color: var(--ink);
-  border-color: var(--line);
-}
-.insp-tab[aria-selected="true"] {
-  color: var(--accent);
+.otl-only-findings[aria-pressed="true"] {
+  background: var(--accent-soft);
   border-color: var(--accent);
+  color: var(--accent);
 }
 
-.insp-findings-badge {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-1);
-  margin-left: var(--sp-2);
+/* Outline rows (js/ui/inspector.js's outlineRow()) — a flat sequence of siblings; `depth` (a
+   custom property on each row) drives indentation, so nesting needs no wrapper elements, which is
+   what keeps scroll restoration and findings patching simple. */
+.otl-row {
+  display: flex; align-items: center; gap: var(--sp-1);
+  width: 100%; text-align: left; background: none; border: 0;
+  padding: 3px var(--sp-2) 3px calc(var(--sp-2) + var(--depth) * 14px);
+  font-size: var(--fs-2); color: var(--ink); cursor: pointer;
 }
-.insp-badge {
-  font-size: var(--fs-0);
-  font-family: var(--font-data);
-  padding: 1px var(--sp-1);
-  border-radius: var(--radius-sm);
-  white-space: nowrap;
+.otl-row[data-kind="group"] {
+  font-size: var(--fs-0); color: var(--muted);
+  text-transform: uppercase; letter-spacing: .04em;
 }
-.insp-badge-error {
+.otl-row[aria-current="true"] { background: var(--accent-soft); }
+.otl-row:hover { background: var(--accent-soft); }
+.otl-twisty { width: 10px; color: var(--muted); }
+.otl-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.otl-detail { font-family: var(--font-data); font-size: var(--fs-0); color: var(--muted); }
+.otl-fields { padding-left: calc(var(--sp-2) + (var(--depth) + 1) * 14px); }
+
+/* Supplementary polish around the verbatim rules above (not part of the brief's own block):
+   breathing room for a row's field editor, a beat of separation between group sections, the two
+   outline-specific buttons (+ Add parameter / Delete parameter) that don't fit the generic
+   .insp-add-row / .insp-remove-btn look (icon-sized) now that there's vertical room for real
+   button text, and preserving build.js's payoffSummary 3-space field separator (a Task 9 review
+   note: plain text collapses runs of whitespace to one space unless told not to). */
+.otl-fields {
+  padding-right: var(--sp-3);
+  padding-top: var(--sp-1);
+  padding-bottom: var(--sp-3);
+}
+.otl-detail {
+  white-space: pre;
+}
+.otl-row[data-kind="group"]:not(:first-child) {
+  margin-top: var(--sp-2);
+}
+.otl-add-param {
+  margin: var(--sp-1) 0 var(--sp-2) calc(var(--sp-2) + 14px);
+}
+.otl-delete-btn {
+  margin-top: var(--sp-2);
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.otl-delete-btn:hover {
   background: var(--danger);
-  color: #fff;
-}
-.insp-badge-warn {
-  background: var(--warn);
   color: #fff;
 }
 
@@ -493,6 +511,7 @@ button:active {
 }
 
 #inspector-body input[type="text"],
+#inspector-body input[type="search"],
 #inspector-body select {
   background: var(--surface);
   color: var(--ink);
@@ -502,6 +521,7 @@ button:active {
   font-size: var(--fs-2);
 }
 #inspector-body input[type="text"]:hover,
+#inspector-body input[type="search"]:hover,
 #inspector-body select:hover {
   border-color: var(--accent);
 }
@@ -560,33 +580,6 @@ button:active {
 .insp-remove-btn:hover {
   color: var(--danger);
   border-color: var(--danger);
-}
-
-/* Parameters table */
-.insp-table {
-  width: 100%;
-  border-collapse: collapse;
-  margin-bottom: var(--sp-2);
-}
-.insp-table th {
-  text-align: left;
-  font-size: var(--fs-0);
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: .04em;
-  font-weight: 400;
-  padding: 0 var(--sp-1) var(--sp-1);
-  border-bottom: 1px solid var(--line);
-}
-.insp-table td {
-  padding: var(--sp-1);
-  vertical-align: top;
-}
-.insp-table input[type="text"] {
-  width: 100%;
-}
-.insp-table .insp-col-del {
-  width: 24px;
 }
 
 /* "Model findings" — findings whose path doesn't match a currently-rendered field. */

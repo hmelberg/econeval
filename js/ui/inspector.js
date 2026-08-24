@@ -1,48 +1,89 @@
-// Inspector: Selection / Parameters / Settings tabs.
+// Inspector: a single filterable outline listing every state/edge/tree-node, parameter, sub-model,
+// and setting — replacing the earlier three-tab (Selection/Parameters/Settings) design (Task 10).
+// Exactly one row's fields are shown at a time (the selected one, indented beneath its row) except
+// the terminal "Settings" group, whose fields are its own group's "content" and show/hide with its
+// own collapse toggle instead (see the "Expansion" section below).
 //
-// createInspector(rootEl, tabsEl, store, {flush}) -> {render()}
-//   rootEl:  #inspector-body — the tab CONTENT goes here (rebuilt on every structural render()).
-//   tabsEl:  #inspector-tabs — panels.js's own .panel-ctl (maximize/minimize) span already lives
-//            here (see js/ui/panels.js's initPanels comment); this module appends its own tab
-//            strip as a SIBLING wrapper (never touches/clears panels.js's span), inserted as the
-//            first child so the tab buttons sit left of the panel-ctl icons regardless of which
-//            module wires up first.
-//   flush:   optional () => void, called before EVERY op commit (Task 12 passes sync.flush — a
-//            canvas/inspector edit must never race a pending debounced YAML-pane edit).
+// createInspector(rootEl, headEl, store, {flush, openScope}) -> {render(), revealSelection()}
+//   rootEl:     #inspector-body — the filter bar + row list go here, rebuilt on every structural
+//               render().
+//   headEl:     #inspector-tabs, the pane's .panel-head. panels.js already writes its own
+//               .panel-ctl (maximize/minimize) span into it and gives it the static text "Model"
+//               (index.html) — this module never touches headEl at all; it's accepted only to
+//               keep the constructor's shape stable for callers (app.js) and any future use.
+//   flush:      optional () => void, called before EVERY op commit (a canvas/inspector edit must
+//               never race a pending debounced YAML-pane edit).
+//   openScope:  optional (modelPath) => void, provided by app.js as canvas.openScope. A row click
+//               drills the canvas into the row's sub-model scope before selecting — inspector.js
+//               holds no canvas reference (importing one would rebuild exactly the backwards peer
+//               dependency scoped-store.js exists to remove), so app.js injects this instead.
+//               Defaults to a no-op (safe for tests / a caller that doesn't need it).
 //
-// Scope (controller ruling): the Selection tab operates on the model named by
-// store.get().selection.modelPath, built via the exported scopedStore chain from canvas.js
-// (empty/absent modelPath = top-level). Parameters and Settings ALWAYS operate top-level in v1;
-// when a sub-model selection is active they show a muted hint pointing at the YAML pane instead.
+// Row source: js/ui/outline/build.js's buildOutline(model) — pure, DOM-free, fully tested. This
+// module is only the view on top of it: buildOutline is always called on the TOP-LEVEL model
+// (modelPath: [] for every row), matching every existing outline-build.test.js fixture. A row's
+// own `sel.modelPath` is therefore always [] today; scopedStoreFor(store, row.sel.modelPath) below
+// is written generally (not hardcoded to `store`) so a future deeper-nesting outline would not
+// need this module's edit logic to change, but it is a no-op in v1.
 //
-// Findings: check(model) (always against the TOP-LEVEL model — findings are whole-document) runs
-// debounced 300ms after every store change. The tab strip carries an error/warning-count badge
-// updated by a lightweight DOM patch (never a structural rebuild, so it can never steal focus);
-// a finding whose `path` matches one of the fields the active tab currently renders is shown
-// inline under that field, everything else is listed under "Model findings" at the tab's bottom.
+// Selection: STRUCTURE rows (state/edge/node) are canvas entities — a click calls
+// openScope(row.sel.modelPath) then store.select(row.sel), the same ordering results.js's
+// Validation click-through already depends on (so the canvas halo's sameModelPath check sees the
+// right scope before the selection notification arrives). PARAM rows carry sel: null in
+// buildOutline (params are not canvas entities), but this module still drives their expansion
+// through the very same store.select mechanism: a click synthesizes
+// {kind:'param', id: name, modelPath: []} — store.js's isSelectionValid already resolves that kind
+// (`scoped.params.has(id)`), so reusing it here (rather than a second, parallel "local selection"
+// concept) gets a deleted-parameter's field editor collapsed for free, on the same rule as a
+// deleted state. SUBMODEL rows have no fields at all; a click only drills the canvas in
+// (openScope([row.label])) — the outline itself never recurses into a sub-model's own content.
+// GROUP header rows (including "Settings") only ever toggle collapse; they never carry a
+// selection.
 //
-// Render discipline: a full render() rebuilds every field element, which would steal focus/cursor
-// out from under a field the user is actively editing. The store.subscribe handler
-// (shouldSkipRender) skips the full rebuild whenever focus is on a real input/select inside
-// rootEl, REGARDLESS of what triggered the store change — our own field commit, a canvas gesture
-// (e.g. clicking a different node with the Select tool while mid-typing elsewhere), a YAML-pane
-// edit, undo/redo. The one exception: on the Selection tab, if the entity the focused field
-// belongs to (captured as `renderedSelection` at the top of the last render()) is no longer
-// resolvable against the fresh model — it was deleted out from under the user, not just
-// deselected — the skip is lifted and render() proceeds immediately, since there's nothing
-// sensible left to keep showing. `committingSelf` (true only for the synchronous span of a field
-// commit, never a button click) always forces the skip on its own — most usefully for an in-place
-// rename, which can otherwise make the OLD selection.id briefly unresolvable the instant the
-// commit lands. Every field also schedules its own reconciling render() on blur (deferred one
-// tick, after the browser has settled the blur/focus transition) so nothing goes stale for long.
+// Expansion: `rowForSelection(allRows, store.get().selection)` (js/ui/outline/build.js) names the
+// one row whose `.otl-fields` shows the entity's editor. The "Settings" group is the one
+// exception — build.js gives it exactly one row (there is no per-setting row to select), so its
+// fields render whenever the group itself is not collapsed, exactly mirroring how any other
+// group's collapse toggle shows/hides its children — Settings simply has no child ROWS, only
+// child FIELDS. This can coexist with a real selected-entity's own fields being shown elsewhere in
+// the same outline (a Structure row expanded AND Settings expanded is normal, not a conflict) —
+// "exactly one row expanded" governs the SELECTED-ENTITY editor only, not group content.
+//
+// Scope: STRUCTURE rows edit through scopedStoreFor(store, row.sel.modelPath); PARAMETERS and
+// SETTINGS always edit the top-level store (row.sel.modelPath is [] there always, by definition —
+// build.js never gives params/settings a non-empty modelPath).
+//
+// Render discipline: a full render() rebuilds the row list, which would steal focus/cursor out
+// from under a field the user is actively editing. shouldSkipRender() skips the rebuild whenever
+// focus is on a real input inside rootEl, REGARDLESS of what triggered the store change — our own
+// field commit, a canvas gesture, a YAML-pane edit, undo/redo — with the single exception that the
+// entity the focused field belongs to (`renderedSelection`, captured at the top of the last
+// render()) is no longer resolvable against the fresh model (deleted out from under the user, not
+// merely deselected), in which case the skip is lifted and render() proceeds immediately.
+// `committingSelf` (true only for the synchronous span of a field commit) always forces the skip
+// on its own — most usefully for an in-place rename, which briefly makes the OLD selection
+// unresolvable the instant the commit lands (store.js nulls out an invalid selection as part of
+// the very same commit); the field keeps focus through that instant and a blur-scheduled render()
+// reconciles a tick later.
+//
+// The filter input and the "Only findings" toggle are LOCAL UI state, not store state — typing in
+// the filter box never touches the store, so it never goes through shouldSkipRender at all; it
+// calls render() directly on every keystroke. Because render() rebuilds rootEl wholesale
+// (including the filter bar itself), render() explicitly captures the filter input's focus +
+// cursor position + rootEl.scrollTop before replaceChildren() and restores all three after —
+// otherwise every filter keystroke would visibly steal its own input's focus and jump the scroll
+// position. The collapsed-group Set and filter string are also the two pieces of outline state
+// persisted through panels.js's saveLayout (read-merge-write, same pattern panels.js's own
+// persist() uses) — replacing the old three-tab design's now-dead `tab` field.
 
 import { compile, ExprError } from '../core/expr.js';
 import { formatCycle } from '../core/model.js';
-import { check } from '../analysis/check.js';
-import { scopedStore } from './scoped-store.js';
+import { scopedStoreFor } from './scoped-store.js';
 import { loadLayout, saveLayout } from './panels.js';
 import * as ops from './ops.js';
-import { scopePrefix, nodePathToCheckPath } from './outline/build.js';
+import {
+  buildOutline, filterRows, scopePrefix, nodePathToCheckPath, rowForSelection, collapseFilter,
+} from './outline/build.js';
 
 // ================================================================================================
 // ---------- Pure helpers (exported + tested in test/inspector-match.test.js) ----------
@@ -61,6 +102,8 @@ export function countByLevel(findings) {
 // splitFindings: findings whose `path` exactly matches a path in `renderedPaths` (a Set of check-
 // path strings currently backing a rendered field) go into `inline` (keyed by path, preserving
 // order, multiple findings per path stack); everything else goes into `rest`, in original order.
+// Not consumed by this module yet (findings integration is Task 11's job — see fieldSlots/
+// registerField below) — kept here, unchanged, because it is pure/DOM-free and already covered.
 export function splitFindings(findings, renderedPaths) {
   const inline = new Map();
   const rest = [];
@@ -93,11 +136,6 @@ function h(tag, attrs = {}, ...children) {
   return node;
 }
 
-function cssEscape(s) {
-  if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(s);
-  return String(s).replace(/[^a-zA-Z0-9_-]/g, (c) => `\\${c}`);
-}
-
 // A tiny "name" op, inline per the controller ruling (name lives top-level on the model, not
 // under settings — not a setSetting keyPath).
 function setNameOp(model, newName) {
@@ -108,36 +146,35 @@ function setNameOp(model, newName) {
   return m;
 }
 
-const TABS = [
-  ['selection', 'Selection'],
-  ['parameters', 'Parameters'],
-  ['settings', 'Settings'],
+const PARAM_FIELDS = [
+  ['value', 'Value'],
+  ['low', 'Low'],
+  ['high', 'High'],
+  ['dist', 'Dist'],
+  ['source', 'Source'],
 ];
 
 // ================================================================================================
 // ---------- createInspector ----------
 // ================================================================================================
 
-export function createInspector(rootEl, tabsEl, store, { flush = () => {} } = {}) {
-  let activeTab = loadLayout().tab;
+export function createInspector(rootEl, headEl, store, { flush = () => {}, openScope = () => {} } = {}) {
   let committingSelf = false;
-  let latestFindings = [];
-  let findingsTimer = null;
-  let fieldSlots = new Map(); // check-path -> error <div> element, from the last structural render
-  let modelFindingsListEl = null;
-  let modelFindingsWrapEl = null;
-  let badgeEl = null;
-  let pendingFocusEl = null; // a just-added blank kv-row's key input, focused at the end of render()
+  let fieldSlots = new Map(); // check-path -> error <div> element, from the last structural render (Task 11 will consume this; unused for now)
+  let rowElements = new Map(); // row id -> its <button class="otl-row"> element, from the last render — used by revealSelection's scrollIntoView
+  let pendingFocusEl = null; // a just-added blank kv-row's key input (or a newly added param's Name input), focused at the end of render()
   let pendingPayoffRef = { count: 0 };
   let pendingWithRef = { count: 0 };
+  let pendingParamFocusName = null; // set right before store.select()-ing a just-added param, consumed by appendParamFields on the render() that call triggers
   let lastSelKey = null;
-  let renderedSelection = { kind: null, id: null }; // the selection the CURRENTLY DISPLAYED Selection-tab fields were built from, set at the top of every render()
+  let renderedSelection = { kind: null, id: null }; // the selection the CURRENTLY DISPLAYED fields were built from, set at the top of every render()
+
+  const initialOutline = loadLayout().outline ?? { collapsed: [], filter: '' };
+  let collapsedGroups = new Set(initialOutline.collapsed ?? []);
+  let filterQuery = initialOutline.filter ?? '';
+  let onlyFindings = false; // shell only in Task 10 (the button exists + toggles); Task 11 composes it with attachFindings' counts. Not persisted — a session-only view preference, unlike the filter text.
 
   // ---------- op commit plumbing ----------
-
-  function scopedTarget(modelPath) {
-    return (modelPath ?? []).reduce((s, name) => scopedStore(s, name), store);
-  }
 
   // Re-checks whether `sel` still resolves against the CURRENT model — the same rule store.js's
   // private isSelectionValid applies (duplicated here in miniature since store.js doesn't export
@@ -145,7 +182,7 @@ export function createInspector(rootEl, tabsEl, store, { flush = () => {} } = {}
   // kind:null is trivially "resolvable" (nothing to orphan).
   function selectionResolvable(sel) {
     if (!sel || sel.kind == null) return true;
-    const scopeModel = scopedTarget(sel.modelPath).get().model;
+    const scopeModel = scopedStoreFor(store, sel.modelPath ?? []).get().model;
     if (!scopeModel) return false;
     if (sel.kind === 'state') return scopeModel.type === 'markov' && scopeModel.states.some((s) => s.name === sel.id);
     if (sel.kind === 'edge') {
@@ -178,22 +215,18 @@ export function createInspector(rootEl, tabsEl, store, { flush = () => {} } = {}
   // edit, undo/redo, ...) — a canvas-origin selection change must not be able to yank a field out
   // from under someone who's mid-typing elsewhere. Two cases still force an immediate render even
   // while typing:
-  //   - Not our own commit AND on the Selection tab AND the entity the focused field belongs to
-  //     (`renderedSelection`, captured at the top of the last render()) is no longer resolvable —
-  //     it was deleted out from under the user (Delete tool, undo, a YAML edit...), so there is
-  //     nothing sensible left to keep showing; reconcile immediately instead of leaving an orphaned
-  //     field on screen. Reselecting a DIFFERENT-but-still-existing entity (e.g. clicking another
-  //     canvas node) does NOT trigger this — the field being edited is untouched, just no longer
-  //     the active selection, so it's left alone until its own blur reconciles it.
+  //   - Not our own commit AND the entity the focused field belongs to (`renderedSelection`,
+  //     captured at the top of the last render()) is no longer resolvable — it was deleted out
+  //     from under the user (Delete tool, undo, a YAML edit...), so there is nothing sensible left
+  //     to keep showing; reconcile immediately instead of leaving an orphaned field on screen.
+  //     Reselecting a DIFFERENT-but-still-existing entity (e.g. clicking another canvas node) does
+  //     NOT trigger this — the field being edited is untouched, just no longer the active
+  //     selection, so it's left alone until its own blur reconciles it.
   //   - Focus isn't a typing target inside rootEl at all — nothing to protect.
-  // Parameters/Settings fields are never selection-entity-bound (ruling 1: always top-level), so
-  // for those two tabs a non-own-commit change is always skipped while typing — there is no
-  // "field may no longer exist" risk to check there.
   function shouldSkipRender() {
     const active = document.activeElement;
     if (!isTypingTarget(active) || !rootEl.contains(active)) return false;
     if (committingSelf) return true;
-    if (activeTab !== 'selection') return true;
     return selectionResolvable(renderedSelection);
   }
 
@@ -265,12 +298,12 @@ export function createInspector(rootEl, tabsEl, store, { flush = () => {} } = {}
     });
     inputEl.addEventListener('blur', () => {
       setTimeout(() => {
-        // Review fix (Critical): if focus landed on ANOTHER typing target inside rootEl (the user
-        // tabbed/clicked from this field straight into the next one), a full render() here would
-        // rebuild every field element out from under it a tick later, destroying its focus (falls
-        // to body) mid-entry. Reuses shouldSkipRender()'s own typing-target arm so the two stay in
-        // lockstep. Blurring OUT of the panel entirely (canvas, body, a button, ...) still renders,
-        // so the panel reconciles promptly as before.
+        // Review fix (Critical, carried from the pre-outline inspector): if focus landed on
+        // ANOTHER typing target inside rootEl (the user tabbed/clicked from this field straight
+        // into the next one), a full render() here would rebuild every field element out from
+        // under it a tick later, destroying its focus mid-entry. Reuses shouldSkipRender()'s own
+        // typing-target arm so the two stay in lockstep. Blurring OUT of the panel entirely
+        // (canvas, body, a button, ...) still renders, so the panel reconciles promptly.
         const active = document.activeElement;
         if (isTypingTarget(active) && rootEl.contains(active)) return;
         render();
@@ -407,7 +440,7 @@ export function createInspector(rootEl, tabsEl, store, { flush = () => {} } = {}
     container.appendChild(wrap);
   }
 
-  // ---------- Selection tab: state / edge / node ----------
+  // ---------- entity fields: state / edge / node ----------
 
   function renderStateFields(container, targetStore, model, name, prefix) {
     const st = model.states.find((s) => s.name === name);
@@ -527,173 +560,65 @@ export function createInspector(rootEl, tabsEl, store, { flush = () => {} } = {}
     });
   }
 
-  // Review fix (Important): the canvas is the only pre-existing way to create a selection — a
-  // keyboard-only or pointer-free user had no way to reach the Selection tab's fields at all.
-  // Small, deliberately simple addition: in the empty state, a labeled <select> listing every
-  // markov state / tree node (path, root inclusive — same entities a canvas click can select) of
-  // the CURRENT TOP-LEVEL model; choosing one calls store.select with modelPath: [] (this picker
-  // only ever addresses the top-level model, matching the "current top-level model" brief — a
-  // sub-model selection is still made by drilling in via canvas, same as today).
-  //
-  // Walks a tree collecting every node's path (root inclusive, in document order) — the exact
-  // path convention ops.nodeAt/canvas.js's own nodeIndex use (array of names from the root).
-  function collectTreePaths(node, path, out) {
-    out.push(path);
-    for (const child of node.children) collectTreePaths(child, [...path, child.name], out);
-  }
+  // ---------- entity fields: parameter (rewritten — was a <tr> of 7 <td>s, now vertical fieldRows) ----------
 
-  function renderSelectionPicker(container, topModel) {
-    const options = []; // { label, sel } in <select> order
-    if (topModel.type === 'markov') {
-      for (const s of topModel.states) {
-        options.push({ label: s.name, sel: { kind: 'state', id: s.name, modelPath: [] } });
-      }
-    } else if (topModel.type === 'tree' && topModel.tree) {
-      const paths = [];
-      collectTreePaths(topModel.tree, [topModel.tree.name], paths);
-      for (const path of paths) {
-        options.push({ label: path.join(' → '), sel: { kind: 'node', id: path, modelPath: [] } });
-      }
-    }
-    if (options.length === 0) return; // nothing to offer (e.g. a markov model with zero states)
-
-    const select = h('select', { 'aria-label': 'Select on canvas, or choose here' },
-      h('option', { value: '' }, '(choose)'),
-      ...options.map((o, i) => h('option', { value: String(i) }, o.label)),
-    );
-    select.addEventListener('change', () => {
-      if (select.value === '') return;
-      store.select(options[Number(select.value)].sel);
-      // Structural change (empty state -> a whole different set of fields), not a value tweak on
-      // an existing field — the native <select> already shows the new value on its own, but
-      // nothing else re-renders on its behalf. onStoreChange's own shouldSkipRender() would in
-      // fact SKIP this notification (a <select> is a typing target, and the OLD (empty) selection
-      // is trivially "resolvable"), so render() is called directly here rather than relying on it.
-      render();
-    });
-    const { row } = fieldRow('Select on canvas, or choose here:', select);
-    container.appendChild(row);
-  }
-
-  function appendScopeHint(container, modelPath) {
-    if (!modelPath || modelPath.length === 0) return;
-    const label = modelPath.join(' → ');
-    container.appendChild(h('p', { class: 'insp-hint' },
-      `The current selection is inside sub-model "${label}". Parameters and Settings here are ` +
-      'always top-level — edit sub-model parameters/settings via the YAML pane.'));
-  }
-
-  function renderSelectionTab(container, state, topModel) {
-    const selection = state.selection ?? { kind: null, id: null };
-    if (!selection.kind) {
-      container.appendChild(h('p', { class: 'insp-empty' }, 'Select a state, branch, or transition on the canvas.'));
-      renderSelectionPicker(container, topModel);
-      renderModelFindingsSection(container);
-      return;
-    }
-    const modelPath = selection.modelPath ?? [];
-    const targetStore = scopedTarget(modelPath);
-    const scopeModel = targetStore.get().model;
-    const prefix = scopePrefix(modelPath);
-
-    if (!scopeModel) {
-      container.appendChild(h('p', { class: 'insp-empty' }, 'Select a state, branch, or transition on the canvas.'));
-      renderModelFindingsSection(container);
-      return;
+  function appendParamFields(container, name, spec, targetStore) {
+    appendNameField(container, targetStore, name, (m, v) => ops.renameParam(m, name, v));
+    if (name === pendingParamFocusName) {
+      pendingParamFocusName = null;
+      const nameInput = container.querySelector('input[aria-label="Name"]');
+      if (nameInput) pendingFocusEl = nameInput;
     }
 
-    if (selection.kind === 'state') renderStateFields(container, targetStore, scopeModel, selection.id, prefix);
-    else if (selection.kind === 'edge') renderEdgeFields(container, targetStore, scopeModel, selection.id, prefix);
-    else if (selection.kind === 'node') renderNodeFields(container, targetStore, scopeModel, selection.id, prefix);
-    else if (selection.kind === 'param') {
-      container.appendChild(h('p', { class: 'insp-empty' }, 'This is a parameter — edit it on the Parameters tab.'));
-    } else {
-      container.appendChild(h('p', { class: 'insp-empty' }, 'Select a state, branch, or transition on the canvas.'));
-    }
-
-    renderModelFindingsSection(container);
-  }
-
-  // ---------- Parameters tab ----------
-
-  function paramRow(name, spec) {
-    const tr = h('tr', { 'data-param': name });
-
-    const nameInput = h('input', { type: 'text', class: 'insp-name-input', value: name, 'aria-label': 'Parameter name' });
-    const nameErr = h('div', { class: 'insp-field-error', hidden: '' });
-    wireCommit(nameInput, () => {
-      const v = nameInput.value.trim();
-      if (!v || v === name) return;
-      const e = commitFieldOp(store, (m) => ops.renameParam(m, name, v));
-      if (e) {
-        nameErr.hidden = false;
-        nameErr.textContent = e.message;
-        nameInput.classList.add('insp-field-invalid');
-      }
-    });
-    const nameTd = h('td', {}, nameInput, nameErr);
-
-    function cell(field, isExpr) {
+    for (const [field, label] of PARAM_FIELDS) {
+      const isExpr = field !== 'source';
       const val = spec[field];
       const input = h('input', {
         type: 'text', class: isExpr ? 'insp-font-data' : '',
-        value: val === undefined ? '' : String(val), 'aria-label': `${field} for ${name}`,
+        value: val === undefined ? '' : String(val), 'aria-label': `${label} for ${name}`,
       });
-      const err = h('div', { class: 'insp-field-error', hidden: '' });
+      const { row, err } = fieldRow(label, input);
       if (isExpr) wireExprInput(input, err);
-      wireCommit(input, makeCommitter(input, err, store, (m, raw) => {
+      wireCommit(input, makeCommitter(input, err, targetStore, (m, raw) => {
         const v = raw.trim() === '' ? null : raw;
         return ops.setParam(m, name, field, v);
       }));
       // check.js only ever emits param findings at .value/.dist (js/analysis/check.js's tryEval
-      // calls) — never at .low/.high, so registering those two as inline finding slots was dead:
-      // they could never receive a match from splitFindings. Pruned to the two paths check.js can
-      // actually produce.
+      // calls) — never at .low/.high, so registering those two as inline finding slots would be
+      // dead: they could never receive a match from splitFindings.
       if (field === 'value' || field === 'dist') registerField(`params.${name}.${field}`, err);
-      return h('td', {}, input, err);
+      container.appendChild(row);
     }
 
-    const delBtn = h('button', {
-      type: 'button', class: 'insp-remove-btn', title: 'Delete parameter', 'aria-label': `Delete parameter ${name}`,
-    }, '×');
-    delBtn.addEventListener('click', () => commitOp(store, (m) => ops.deleteParam(m, name)));
-
-    tr.append(nameTd, cell('value', true), cell('low', true), cell('high', true), cell('dist', true), cell('source', false), h('td', { class: 'insp-col-del' }, delBtn));
-    return tr;
+    const delBtn = h('button', { type: 'button', class: 'otl-delete-btn' }, `Delete parameter "${name}"`);
+    delBtn.addEventListener('click', () => commitOp(targetStore, (m) => ops.deleteParam(m, name)));
+    container.appendChild(delBtn);
   }
 
-  function renderParametersTab(container, state, topModel) {
-    appendScopeHint(container, state.selection?.modelPath);
-
-    const table = h('table', { class: 'insp-table' });
-    table.appendChild(h('thead', {}, h('tr', {},
-      h('th', {}, 'Name'), h('th', {}, 'Value'), h('th', {}, 'Low'), h('th', {}, 'High'),
-      h('th', {}, 'Dist'), h('th', {}, 'Source'), h('th', { class: 'insp-col-del' }, ''),
-    )));
-    const tbody = h('tbody');
-    for (const [name, spec] of topModel.params) tbody.appendChild(paramRow(name, spec));
-    table.appendChild(tbody);
-    container.appendChild(table);
-
-    const addBtn = h('button', { type: 'button', class: 'insp-add-row' }, '+ add parameter');
-    addBtn.addEventListener('click', () => {
-      const before = new Set(topModel.params.keys());
+  function buildAddParamButton() {
+    const btn = h('button', { type: 'button', class: 'insp-add-row otl-add-param' }, '+ Add parameter');
+    btn.addEventListener('click', () => {
+      const before = new Set(store.get().model.params.keys());
       const e = commitOp(store, (m) => ops.addParam(m));
       if (!e) {
         const after = store.get().model.params;
         const added = [...after.keys()].find((k) => !before.has(k));
         if (added) {
-          const input = rootEl.querySelector(`[data-param="${cssEscape(added)}"] .insp-name-input`);
-          if (input) input.focus();
+          pendingParamFocusName = added;
+          // Selecting the new param makes its row "the expanded one" so its fields actually
+          // render — this call re-enters render() synchronously (store.select -> notify ->
+          // onStoreChange -> render(), not skipped: no typing target has focus mid-button-click),
+          // which is what lets appendParamFields see pendingParamFocusName and stash the Name
+          // input into pendingFocusEl before THIS render() call returns.
+          store.select({ kind: 'param', id: added, modelPath: [] });
         }
       }
     });
-    container.appendChild(addBtn);
-
-    renderModelFindingsSection(container);
+    return btn;
   }
 
-  // ---------- Settings tab ----------
+  // ---------- settings fields (always top-level; there is no per-setting row, only the one
+  // "Settings" group row — see the module doc's "Expansion" section) ----------
 
   function appendNumberField(container, label, currentValue, keyPath, { nullable = false } = {}) {
     const input = h('input', {
@@ -724,9 +649,7 @@ export function createInspector(rootEl, tabsEl, store, { flush = () => {} } = {}
     container.appendChild(row);
   }
 
-  function renderSettingsTab(container, state, topModel) {
-    appendScopeHint(container, state.selection?.modelPath);
-
+  function renderSettingsFieldsInto(container, topModel) {
     appendNameField(container, store, topModel.name, (m, v) => setNameOp(m, v));
 
     container.appendChild(h('div', { class: 'insp-row' },
@@ -784,131 +707,110 @@ export function createInspector(rootEl, tabsEl, store, { flush = () => {} } = {}
       registerField('settings.start', err);
       container.appendChild(row);
     }
-
-    renderModelFindingsSection(container);
   }
 
-  // ---------- findings: badge + inline + "Model findings" ----------
+  // ---------- row fields dispatcher ----------
 
-  function renderModelFindingsSection(container) {
-    const wrap = h('div', { class: 'insp-model-findings' });
-    wrap.appendChild(h('div', { class: 'insp-model-findings-head' }, 'Model findings'));
-    const list = h('ul', { class: 'insp-model-findings-list' });
-    wrap.appendChild(list);
-    container.appendChild(wrap);
-    modelFindingsListEl = list;
-    modelFindingsWrapEl = wrap;
-  }
-
-  function updateBadge() {
-    if (!badgeEl) return;
-    badgeEl.replaceChildren();
-    const { errors, warnings } = countByLevel(latestFindings);
-    if (errors > 0) {
-      badgeEl.appendChild(h('span', { class: 'insp-badge insp-badge-error' }, `${errors} error${errors === 1 ? '' : 's'}`));
-    }
-    if (warnings > 0) {
-      badgeEl.appendChild(h('span', { class: 'insp-badge insp-badge-warn' }, `${warnings} warning${warnings === 1 ? '' : 's'}`));
-    }
-  }
-
-  function applyFindingsToDom() {
-    updateBadge();
-    const renderedPaths = new Set(fieldSlots.keys());
-    const { inline, rest } = splitFindings(latestFindings, renderedPaths);
-    for (const [path, errEl] of fieldSlots) {
-      const msgs = inline.get(path);
-      if (msgs && msgs.length) {
-        errEl.hidden = false;
-        errEl.textContent = msgs.map((m) => m.message).join(' · ');
-        const anyError = msgs.some((m) => m.level === 'error');
-        errEl.classList.toggle('insp-lvl-error', anyError);
-        errEl.classList.toggle('insp-lvl-warn', !anyError);
-      } else {
-        errEl.hidden = true;
-        errEl.textContent = '';
-        errEl.classList.remove('insp-lvl-error', 'insp-lvl-warn');
+  function buildRowFields(container, row, topModel) {
+    if (row.kind === 'state' || row.kind === 'edge' || row.kind === 'node') {
+      const modelPath = row.sel.modelPath ?? [];
+      const targetStore = scopedStoreFor(store, modelPath);
+      const scopeModel = targetStore.get().model;
+      const prefix = scopePrefix(modelPath);
+      if (!scopeModel) {
+        container.appendChild(h('p', { class: 'insp-empty' }, 'Select a state, branch, or transition on the canvas.'));
+        return;
       }
-    }
-    if (modelFindingsListEl) {
-      modelFindingsListEl.replaceChildren();
-      for (const f of rest) {
-        modelFindingsListEl.appendChild(h('li', { class: f.level === 'error' ? 'insp-lvl-error' : 'insp-lvl-warn' },
-          h('code', {}, f.path || '(model)'), ` — ${f.message}`));
-      }
-      if (modelFindingsWrapEl) modelFindingsWrapEl.hidden = rest.length === 0;
+      if (row.kind === 'state') renderStateFields(container, targetStore, scopeModel, row.sel.id, prefix);
+      else if (row.kind === 'edge') renderEdgeFields(container, targetStore, scopeModel, row.sel.id, prefix);
+      else renderNodeFields(container, targetStore, scopeModel, row.sel.id, prefix);
+    } else if (row.kind === 'param') {
+      const spec = topModel.params.get(row.label);
+      if (!spec) return; // deleted out from under this render pass shouldn't happen — buildOutline just ran against this same model
+      appendParamFields(container, row.label, spec, store);
+    } else if (row.id === 'group:settings') {
+      renderSettingsFieldsInto(container, topModel);
     }
   }
 
-  function scheduleFindingsCheck() {
-    if (findingsTimer) clearTimeout(findingsTimer);
-    findingsTimer = setTimeout(() => {
-      findingsTimer = null;
-      const m = store.get().model;
-      latestFindings = m ? check(m) : [];
-      applyFindingsToDom();
-    }, 300);
-  }
+  // ---------- outline chrome: filter bar, group collapse, row list ----------
 
-  // ---------- tab strip ----------
-
-  function setActiveTab(tab) {
-    if (tab === activeTab) return;
-    activeTab = tab;
+  function persistOutlineState() {
     const blob = loadLayout();
-    saveLayout({ ...blob, tab });
+    saveLayout({ ...blob, outline: { collapsed: [...collapsedGroups], filter: filterQuery } });
+  }
+
+  function toggleCollapsed(id) {
+    if (collapsedGroups.has(id)) collapsedGroups.delete(id);
+    else collapsedGroups.add(id);
+    persistOutlineState();
     render();
   }
 
-  const TAB_KEYS = TABS.map(([key]) => key);
-
-  function focusTab(key) {
-    const btn = tabsEl.querySelector(`#insp-tab-${key}`);
-    if (btn) btn.focus();
+  function buildFilterBar() {
+    const bar = h('div', { class: 'otl-filterbar' });
+    const filterInput = h('input', {
+      type: 'search', id: 'otl-filter', class: 'otl-filter-input',
+      placeholder: 'Filter…', 'aria-label': 'Filter outline', value: filterQuery,
+    });
+    filterInput.addEventListener('input', () => {
+      filterQuery = filterInput.value;
+      persistOutlineState();
+      render(); // local UI state, not a store change -- bypasses shouldSkipRender entirely, on purpose
+    });
+    const onlyBtn = h('button', {
+      type: 'button', class: 'otl-only-findings', 'aria-pressed': String(onlyFindings),
+      title: 'Show only rows with findings',
+    }, 'Only findings');
+    onlyBtn.addEventListener('click', () => {
+      onlyFindings = !onlyFindings;
+      render();
+    });
+    bar.append(filterInput, onlyBtn);
+    return bar;
   }
 
-  // Roving-tabindex arrow navigation (WAI-ARIA tabs pattern): ArrowLeft/ArrowRight move AND
-  // activate the adjacent tab (wrapping at the ends) — automatic activation, matching a click.
-  function onTabKeydown(e) {
-    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-    e.preventDefault();
-    const i = TAB_KEYS.indexOf(activeTab);
-    const dir = e.key === 'ArrowRight' ? 1 : -1;
-    setActiveTab(TAB_KEYS[(i + dir + TAB_KEYS.length) % TAB_KEYS.length]);
+  // One row. Indent comes from `depth` via a custom property, so nesting needs no wrapper elements
+  // and the whole list stays a flat sequence of siblings — which is what keeps scroll restoration
+  // and findings patching simple.
+  function outlineRow(row, { expanded, hasChildren, collapsed }) {
+    const btn = h('button', {
+      type: 'button', class: 'otl-row', id: `otl-${row.id}`,
+      'data-kind': row.kind, style: `--depth:${row.depth}`,
+      'aria-expanded': hasChildren ? String(!collapsed) : undefined,
+      'aria-current': expanded ? 'true' : undefined,
+    });
+    btn.append(
+      h('span', { class: 'otl-twisty' }, hasChildren ? (collapsed ? '▸' : '▾') : ''),
+      h('span', { class: 'otl-label' }, row.label),
+      h('span', { class: 'otl-detail' }, row.detail),
+      h('span', { class: 'otl-dot', hidden: '' }), // Task 11 fills this in place, never rebuilds it
+    );
+    btn.addEventListener('click', () => {
+      if (row.kind === 'group') { toggleCollapsed(row.id); return; }
+      if (row.kind === 'submodel') { openScope([row.label]); return; }
+      if (row.sel) { openScope(row.sel.modelPath ?? []); store.select(row.sel); return; }
+      if (row.kind === 'param') store.select({ kind: 'param', id: row.label, modelPath: [] });
+    });
+    return btn;
   }
 
-  function renderTabStrip() {
-    let mine = tabsEl.querySelector('#insp-tabs-own');
-    if (!mine) {
-      mine = h('div', { id: 'insp-tabs-own', class: 'insp-tabstrip', role: 'tablist', 'aria-label': 'Inspector tabs' });
-      tabsEl.insertBefore(mine, tabsEl.firstChild);
-    }
-    // Preserve focus across the rebuild: every tab <button> is replaced below, which would
-    // otherwise drop keyboard focus to <body> right after a click or an arrow-key move. Captured
-    // BEFORE replaceChildren() destroys the old (still-focused) button.
-    const hadTabFocus = mine.contains(document.activeElement) && document.activeElement.getAttribute('role') === 'tab';
-
-    mine.replaceChildren();
-    for (const [key, label] of TABS) {
-      const isActive = activeTab === key;
-      const btn = h('button', {
-        type: 'button', class: 'insp-tab', role: 'tab', id: `insp-tab-${key}`,
-        'aria-selected': String(isActive), tabindex: isActive ? '0' : '-1',
-      }, label);
-      btn.addEventListener('click', () => setActiveTab(key));
-      btn.addEventListener('keydown', onTabKeydown);
-      mine.appendChild(btn);
-    }
-    badgeEl = h('span', { class: 'insp-findings-badge' });
-    mine.appendChild(badgeEl);
-    updateBadge();
-
-    if (hadTabFocus) focusTab(activeTab);
+  function lastIndexWhere(arr, pred) {
+    for (let i = arr.length - 1; i >= 0; i -= 1) if (pred(arr[i])) return i;
+    return -1;
   }
 
   // ---------- top-level render ----------
 
   function render() {
+    // Captured BEFORE replaceChildren() destroys whatever currently has focus — restored after,
+    // below. See the module doc's render-discipline section for why this exists.
+    const scrollTop = rootEl.scrollTop;
+    const active = document.activeElement;
+    const preserveFilterFocus = !!(active && active.id === 'otl-filter' && rootEl.contains(active));
+    const filterSelStart = preserveFilterFocus ? active.selectionStart : null;
+    const filterSelEnd = preserveFilterFocus ? active.selectionEnd : null;
+
     const state = store.get();
     renderedSelection = state.selection ?? { kind: null, id: null };
 
@@ -920,21 +822,60 @@ export function createInspector(rootEl, tabsEl, store, { flush = () => {} } = {}
     }
 
     fieldSlots = new Map();
-    renderTabStrip();
-
+    rowElements = new Map();
     rootEl.replaceChildren();
+
     const topModel = state.model;
     if (!topModel) {
       rootEl.appendChild(h('p', { class: 'insp-empty' }, 'No model loaded.'));
-    } else if (activeTab === 'selection') {
-      renderSelectionTab(rootEl, state, topModel);
-    } else if (activeTab === 'parameters') {
-      renderParametersTab(rootEl, state, topModel);
-    } else {
-      renderSettingsTab(rootEl, state, topModel);
+      return;
     }
 
-    applyFindingsToDom();
+    rootEl.appendChild(buildFilterBar());
+    const list = h('div', { class: 'otl-list' });
+    rootEl.appendChild(list);
+
+    const allRows = buildOutline(topModel);
+    const filtered = filterRows(allRows, filterQuery);
+    // onlyFindings composition (keep only rows with findings or a findings-bearing descendant) is
+    // Task 11's job — it needs attachFindings' counts, which this task doesn't compute yet.
+    const visible = collapseFilter(filtered, collapsedGroups);
+    const expandedRow = rowForSelection(allRows, state.selection);
+    const expandedId = expandedRow ? expandedRow.id : null;
+
+    const paramsCollapsed = collapsedGroups.has('group:parameters');
+    let addParamAfterIndex = -1;
+    if (!paramsCollapsed) {
+      addParamAfterIndex = lastIndexWhere(visible, (r) => r.parentId === 'group:parameters');
+      if (addParamAfterIndex < 0) addParamAfterIndex = visible.findIndex((r) => r.id === 'group:parameters');
+    }
+
+    visible.forEach((row, i) => {
+      const hasChildren = allRows.some((r) => r.parentId === row.id);
+      const collapsed = collapsedGroups.has(row.id);
+      const expanded = row.kind !== 'group' && row.id === expandedId;
+      const btn = outlineRow(row, { expanded, hasChildren, collapsed });
+      list.appendChild(btn);
+      rowElements.set(row.id, btn);
+
+      const showFields = row.id === 'group:settings' ? !collapsed : row.id === expandedId;
+      if (showFields) {
+        const fieldsEl = h('div', { class: 'otl-fields', style: `--depth:${row.depth}` });
+        buildRowFields(fieldsEl, row, topModel);
+        list.appendChild(fieldsEl);
+      }
+
+      if (i === addParamAfterIndex) list.appendChild(buildAddParamButton());
+    });
+
+    rootEl.scrollTop = scrollTop;
+    if (preserveFilterFocus) {
+      const el = rootEl.querySelector('#otl-filter');
+      if (el) {
+        el.focus();
+        if (filterSelStart != null) el.setSelectionRange(filterSelStart, filterSelEnd);
+      }
+    }
 
     if (pendingFocusEl) {
       const toFocus = pendingFocusEl;
@@ -943,20 +884,38 @@ export function createInspector(rootEl, tabsEl, store, { flush = () => {} } = {}
     }
   }
 
+  // Expands the selected row (uncollapsing any collapsed ancestor group above it) and scrolls it
+  // into view. Exposed for results.js's Validation-tab click-through (via app.js's
+  // selectOnCanvas): canvas.openScope(...) -> store.select(sel) already happened by the time this
+  // is called, so the row list already reflects the new selection (unless shouldSkipRender
+  // happened to skip that notification) — this call forces a render() unconditionally to make
+  // sure, then scrolls.
+  function revealSelection() {
+    const state = store.get();
+    if (!state.model) return;
+    const allRows = buildOutline(state.model);
+    const row = rowForSelection(allRows, state.selection);
+    if (!row) return;
+    const byId = new Map(allRows.map((r) => [r.id, r]));
+    let pid = row.parentId;
+    let changed = false;
+    while (pid) {
+      if (collapsedGroups.has(pid)) { collapsedGroups.delete(pid); changed = true; }
+      pid = byId.get(pid)?.parentId ?? null;
+    }
+    if (changed) persistOutlineState();
+    render();
+    const el = rowElements.get(row.id);
+    if (el) el.scrollIntoView({ block: 'nearest' });
+  }
+
   function onStoreChange() {
-    scheduleFindingsCheck();
     if (shouldSkipRender()) return;
     render();
   }
   store.subscribe(onStoreChange);
 
-  const initModel = store.get().model;
-  latestFindings = initModel ? check(initModel) : [];
   render();
 
-  // `setActiveTab` exposed for Task 6's Validation-tab click-through: app.js's own selectOnCanvas
-  // calls `store.select(sel)` then `setActiveTab('selection')` — this IS the exact function the
-  // Selection tab's own button click already runs (saveLayout's read-merge-write persist + render),
-  // so an external caller switching tabs never duplicates that logic, just reuses it.
-  return { render, setActiveTab };
+  return { render, revealSelection };
 }

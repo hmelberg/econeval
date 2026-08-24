@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseModel } from '../js/core/model.js';
-import { buildOutline, filterRows, attachFindings } from '../js/ui/outline/build.js';
+import {
+  buildOutline, filterRows, attachFindings, rowForSelection, collapseFilter,
+} from '../js/ui/outline/build.js';
 
 const MARKOV = () => parseModel(`
 econeval: 1
@@ -215,4 +217,64 @@ test('null p-value shows as empty string, matching render.js pLabelText conventi
   const rows = buildOutline(model);
   const edge = byId(rows, 'edge:well>dead');
   assert.equal(edge.detail, '', 'null p-value should show as empty string');
+});
+
+// --- rowForSelection (Task 10) ---
+
+test('rowForSelection: matches a state selection to its row', () => {
+  const rows = buildOutline(MARKOV());
+  const row = rowForSelection(rows, { kind: 'state', id: 'well', modelPath: [] });
+  assert.equal(row.id, 'state:well');
+});
+
+test('rowForSelection: matches an edge selection by {from, to}', () => {
+  const rows = buildOutline(MARKOV());
+  const row = rowForSelection(rows, { kind: 'edge', id: { from: 'well', to: 'dead' }, modelPath: [] });
+  assert.equal(row.id, 'edge:well>dead');
+});
+
+test('rowForSelection: matches a tree node selection by its full path array', () => {
+  const rows = buildOutline(TREE());
+  const row = rowForSelection(rows, { kind: 'node', id: ['Root', 'A'], modelPath: [] });
+  assert.equal(row.id, 'node:Root/A');
+});
+
+test('rowForSelection: a param selection falls back to matching a param row by name (params carry sel:null)', () => {
+  const rows = buildOutline(MARKOV());
+  const row = rowForSelection(rows, { kind: 'param', id: 'c_well', modelPath: [] });
+  assert.equal(row.id, 'param:c_well');
+});
+
+test('rowForSelection: no selection, or a selection matching nothing, returns null', () => {
+  const rows = buildOutline(MARKOV());
+  assert.equal(rowForSelection(rows, null), null);
+  assert.equal(rowForSelection(rows, { kind: null, id: null }), null);
+  assert.equal(rowForSelection(rows, { kind: 'state', id: 'nope', modelPath: [] }), null);
+  assert.equal(rowForSelection(rows, { kind: 'param', id: 'c_well', modelPath: ['post'] }), null);
+});
+
+// --- collapseFilter (Task 10) ---
+
+test('collapseFilter: a collapsed group drops its descendants but keeps the group row itself', () => {
+  const rows = buildOutline(MARKOV());
+  const visible = collapseFilter(rows, new Set(['group:structure']));
+  assert.ok(visible.some((r) => r.id === 'group:structure'));
+  assert.ok(!visible.some((r) => r.id === 'state:well'));
+  assert.ok(!visible.some((r) => r.id === 'edge:well>dead'));
+  // an unrelated group's rows are untouched
+  assert.ok(visible.some((r) => r.id === 'group:parameters'));
+  assert.ok(visible.some((r) => r.id === 'param:c_well'));
+});
+
+test('collapseFilter: collapsing a state drops its own edges without touching sibling states', () => {
+  const rows = buildOutline(MARKOV());
+  const visible = collapseFilter(rows, new Set(['state:well']));
+  assert.ok(visible.some((r) => r.id === 'state:well'));
+  assert.ok(!visible.some((r) => r.id === 'edge:well>dead'));
+  assert.ok(visible.some((r) => r.id === 'state:dead'));
+});
+
+test('collapseFilter: an empty collapsed set returns every row unchanged', () => {
+  const rows = buildOutline(MARKOV());
+  assert.deepEqual(collapseFilter(rows, new Set()), rows);
 });
