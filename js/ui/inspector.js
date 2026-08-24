@@ -87,11 +87,17 @@
 // findings that match no row at all — nothing check() reports is ever silently dropped. A finding
 // whose path also matches a field currently rendered in the expanded row's `.otl-fields` block shows
 // a THIRD time, inline beneath that field, via the pre-existing fieldSlots/splitFindings mechanism —
-// unrelated to attachFindings, and unchanged by this task. The "Only findings" toggle (wired here)
-// composes with the text filter in a fixed order: filterRows(rows, query) first, then narrow to
-// rows with a non-zero attachFindings count (own finding, or an ancestor of one) — see render()'s
-// own comment at the composition site for why `counts` must be computed against the FULL row set,
-// not the already-filtered one.
+// unrelated to attachFindings, and unchanged by this task, EXCEPT for one guard: a fieldSlot can be
+// "owned" by a LIVE, uncommitted signal instead (an in-progress expression-compile error, or a
+// just-rejected commit — see markFieldOwned's own doc, near registerField), in which case
+// paintFindings() leaves it alone rather than overwriting it with a check()-based message that can
+// only ever describe the last COMMITTED value. The "Only findings" toggle (wired here) composes with
+// the text filter in a fixed order: filterRows(rows, query) first, then narrow to rows with a
+// non-zero attachFindings count (own finding, or an ancestor of one) — see render()'s own comment at
+// the composition site for why `counts` must be computed against the FULL row set, not the
+// already-filtered one. A row's dot also carries `role="img"` + a live `aria-label` (not just
+// `title`) so a finding is discoverable via the row button's own accessible name, not only on mouse
+// hover — see paintFindings' doc.
 
 import { compile, ExprError } from '../core/expr.js';
 import { formatCycle } from '../core/model.js';
@@ -181,7 +187,7 @@ const PARAM_FIELDS = [
 
 export function createInspector(rootEl, headEl, store, { flush = () => {}, openScope = () => {} } = {}) {
   let committingSelf = false;
-  let fieldSlots = new Map(); // check-path -> error <div> element, from the last structural render (Task 11 will consume this; unused for now)
+  let fieldSlots = new Map(); // check-path -> error <div> element, from the last structural render — consumed by paintFindings() (inline check()-based messages) and by wireExprInput/makeCommitter/kvRow's own live-validation and commit-error writes (markFieldOwned/clearFieldOwned)
   let rowElements = new Map(); // row id -> its <button class="otl-row"> element, from the last render — used by revealSelection's scrollIntoView
   let selectedFieldsEl = null; // the SELECTED ENTITY's own .otl-fields container from the last render (never Settings' — see buildRowFields/render()) — used by shouldSkipRender to scope its force-reconcile exception to what's actually focused, not just "some selection somewhere went stale"
   let pendingFocusEl = null; // a just-added blank kv-row's key input (or a newly added param's Name input), focused at the end of render()
@@ -317,6 +323,25 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
     fieldSlots.set(path, errEl);
   }
 
+  // A field's error slot can be "owned" by a LIVE, uncommitted signal — a live expression-compile
+  // error (wireExprInput, below) or a rejected commit (makeCommitter / kvRow's commitKey|commitVal /
+  // the Start-state select's own handler) — that paintFindings() must never overwrite while it
+  // stands. check() only ever reasons about the last COMMITTED model, so a debounced paint firing
+  // while a live message is showing would silently clear the explanation (usually to nothing, since
+  // check() can't see an uncommitted edit at all) while the invalid value and its red border stay on
+  // screen — problem still visible, cause erased. Review fix (Important, Task 11 review). Marked the
+  // instant a live/commit write shows a message; cleared the instant that SAME mechanism clears it
+  // (valid input again, or a successful commit) — from that point the slot is fair game for
+  // paintFindings again. A plain dataset flag on the element itself (not a WeakSet) — errEl
+  // instances are discarded wholesale on every structural render() anyway, so there is nothing to
+  // reset explicitly between renders.
+  function markFieldOwned(errEl) {
+    errEl.dataset.localOwned = '1';
+  }
+  function clearFieldOwned(errEl) {
+    delete errEl.dataset.localOwned;
+  }
+
   // ---------- field wiring ----------
 
   function wireExprInput(inputEl, errEl) {
@@ -326,6 +351,7 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
         inputEl.classList.remove('insp-field-invalid');
         errEl.hidden = true;
         errEl.textContent = '';
+        clearFieldOwned(errEl);
         return;
       }
       try {
@@ -333,11 +359,13 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
         inputEl.classList.remove('insp-field-invalid');
         errEl.hidden = true;
         errEl.textContent = '';
+        clearFieldOwned(errEl);
       } catch (e) {
         if (e instanceof ExprError) {
           inputEl.classList.add('insp-field-invalid');
           errEl.hidden = false;
           errEl.textContent = e.message;
+          markFieldOwned(errEl);
         }
       }
     });
@@ -374,9 +402,11 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
         errEl.hidden = false;
         errEl.textContent = err.message;
         inputEl.classList.add('insp-field-invalid');
+        markFieldOwned(errEl);
       } else {
         errEl.hidden = true;
         errEl.textContent = '';
+        clearFieldOwned(errEl);
       }
     };
   }
@@ -425,6 +455,7 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
           err.hidden = false;
           err.textContent = e.message;
           keyInput.classList.add('insp-field-invalid');
+          markFieldOwned(err);
         } else if (pendingRef) {
           pendingRef.count = Math.max(0, pendingRef.count - 1);
         }
@@ -436,6 +467,7 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
         err.hidden = false;
         err.textContent = e.message;
         keyInput.classList.add('insp-field-invalid');
+        markFieldOwned(err);
       }
     }
 
@@ -447,9 +479,11 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
         err.hidden = false;
         err.textContent = e.message;
         valInput.classList.add('insp-field-invalid');
+        markFieldOwned(err);
       } else {
         err.hidden = true;
         err.textContent = '';
+        clearFieldOwned(err);
         if (isNew && pendingRef) pendingRef.count = Math.max(0, pendingRef.count - 1);
       }
     }
@@ -754,9 +788,11 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
         if (e) {
           err.hidden = false;
           err.textContent = e.message;
+          markFieldOwned(err);
         } else {
           err.hidden = true;
           err.textContent = '';
+          clearFieldOwned(err);
         }
       });
       registerField('settings.start', err);
@@ -806,17 +842,31 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
   // per row. Non-group rows get `.otl-dot`: attachFindings' `byRow` map assigns each finding to the
   // single most-specific row that owns it (js/ui/outline/build.js's longest-checkPath-match rule),
   // so a dot means "this exact row has an own finding" — colored --danger if any of them is an
-  // error, --warn otherwise, `title` the joined messages (verbatim per the brief). GROUP headers
-  // (including `group:settings`, whose one row is also where settings-scoped findings land — there
-  // is no per-setting row to carry a dot instead) get `.otl-count` in place of a dot: attachFindings'
+  // error, --warn otherwise, `title` the joined messages (verbatim per the brief) AND `aria-label`
+  // carrying the same text (Important, Task 11 review, controller's own brief follow-up): the dot is
+  // a plain non-focusable `<span>` inside the row `<button>`, and `title` alone never participates in
+  // that button's accessible-name computation, so a keyboard/screen-reader user arrowing through the
+  // outline got zero signal a row had a finding at all. `role="img"` (set once, statically, in
+  // outlineRow below) plus a live `aria-label` here IS included in the ancestor button's computed
+  // name — `title` is kept alongside it purely for mouse users. GROUP headers (including
+  // `group:settings`, whose one row is also where settings-scoped findings land — there is no
+  // per-setting row to carry a dot instead) get `.otl-count` in place of a dot: attachFindings'
   // `counts` map already sums a row's OWN findings together with every descendant's (see its own
   // doc in build.js), so for a leaf group like Settings the badge alone already reflects its direct
-  // findings — no separate dot needed or shown for any group row. `counts` also has non-zero entries
-  // for ordinary structural rows with children (a state's edges, a tree node's descendants) — those
-  // are deliberately never shown as a badge (the brief's own wording: "counts... on group headers"),
-  // only used for the onlyFindings composition below.
-  function paintFindings() {
-    const { byRow, counts, residual } = attachFindings(allRows, latestFindings);
+  // findings — no separate dot needed or shown for any group row. Real visible badge text already
+  // participates in the button's accessible name on its own, so group rows need no aria-label here.
+  // `counts` also has non-zero entries for ordinary structural rows with children (a state's edges, a
+  // tree node's descendants) — those are deliberately never shown as a badge (the brief's own
+  // wording: "counts... on group headers"), only used for the onlyFindings composition in render().
+  //
+  // `computed`: the `{byRow, counts, residual}` `attachFindings(allRows, latestFindings)` already
+  // produced, when the caller has one lying around (render(), which needs `counts` for the
+  // onlyFindings composition anyway) — reused rather than recomputed (Minor, Task 11 review: same
+  // pure inputs, same output, no reason to run it twice in the same tick). scheduleFindingsCheck()'s
+  // debounce timeout has no such value on hand, so it calls this with no argument and lets it compute
+  // its own.
+  function paintFindings(computed) {
+    const { byRow, counts, residual } = computed ?? attachFindings(allRows, latestFindings);
 
     for (const [id, el] of rowElements) {
       const dot = el.querySelector('.otl-dot');
@@ -824,14 +874,17 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
         const findings = byRow.get(id);
         if (findings && findings.length) {
           const anyError = findings.some((f) => f.level === 'error');
+          const joined = findings.map((f) => f.message).join(' · ');
           dot.hidden = false;
           dot.classList.toggle('otl-dot-error', anyError);
           dot.classList.toggle('otl-dot-warn', !anyError);
-          dot.title = findings.map((f) => f.message).join(' · ');
+          dot.title = joined;
+          dot.setAttribute('aria-label', joined);
         } else {
           dot.hidden = true;
           dot.classList.remove('otl-dot-error', 'otl-dot-warn');
           dot.removeAttribute('title');
+          dot.removeAttribute('aria-label');
         }
         continue;
       }
@@ -851,10 +904,18 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
     // Inline field messages — predates the outline (see splitFindings' own doc above): a finding
     // whose path exactly matches a check-path currently backing a RENDERED field (fieldSlots, only
     // populated for the one expanded row's fields, or Settings') shows directly beneath that field,
-    // in addition to (never instead of) the dot on its row.
+    // in addition to (never instead of) the dot on its row. Review fix (Important, Task 11 review):
+    // a slot currently marked `markFieldOwned` (a LIVE, uncommitted expression-compile error, or a
+    // just-rejected commit — see markFieldOwned's own doc) is skipped entirely here — check() only
+    // ever reasons about the last COMMITTED model, so this debounced pass would otherwise clear the
+    // live explanation for exactly the invalid value still showing (red border and all) the instant
+    // an unrelated store change fires within the 300ms window. Skipping leaves the live message
+    // exactly as its own mechanism left it; the slot becomes paintable again the moment that
+    // mechanism itself clears the ownership mark (valid input, or a successful commit).
     const renderedPaths = new Set(fieldSlots.keys());
     const { inline } = splitFindings(latestFindings, renderedPaths);
     for (const [path, errEl] of fieldSlots) {
+      if (errEl.dataset.localOwned) continue;
       const msgs = inline.get(path);
       if (msgs && msgs.length) {
         errEl.hidden = false;
@@ -941,7 +1002,10 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
   // group's badge alone already covers its direct findings, no dot needed) — never both, so
   // paintFindings() has exactly one thing to patch per row. Both start hidden/empty; paintFindings()
   // (called at the end of every render() and again 300ms after every store change) fills them in
-  // place, never rebuilding a row.
+  // place, never rebuilding a row. The dot carries `role="img"` from the start (Task 11 review,
+  // Important) — set once here, statically, since it never changes — so the `aria-label`
+  // paintFindings() gives it whenever a finding is present participates in the row BUTTON's own
+  // accessible-name computation; a bare `title` on a plain non-focusable `<span>` does not.
   function outlineRow(row, { expanded, hasChildren, collapsed }) {
     const btn = h('button', {
       type: 'button', class: 'otl-row', id: `otl-${row.id}`,
@@ -953,7 +1017,9 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
       h('span', { class: 'otl-twisty' }, hasChildren ? (collapsed ? '▸' : '▾') : ''),
       h('span', { class: 'otl-label' }, row.label),
       h('span', { class: 'otl-detail' }, row.detail),
-      row.kind === 'group' ? h('span', { class: 'otl-count', hidden: '' }) : h('span', { class: 'otl-dot', hidden: '' }),
+      row.kind === 'group'
+        ? h('span', { class: 'otl-count', hidden: '' })
+        : h('span', { class: 'otl-dot', role: 'img', hidden: '' }),
     );
     btn.addEventListener('click', () => {
       if (row.kind === 'group') { toggleCollapsed(row.id); return; }
@@ -1017,13 +1083,29 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
     // correctly; computing it against an already-text-filtered subset could misattribute a finding
     // to the wrong (shorter-checkPath) surviving ancestor, or roll a count into a group header that
     // the true owning row (filtered out by the text query) was actually responsible for.
-    const { counts } = attachFindings(allRows, latestFindings);
-    const findingsFiltered = onlyFindings ? filtered.filter((r) => counts.has(r.id)) : filtered;
+    //
+    // `attached` is computed exactly once here and reused below by paintFindings(attached) (Minor,
+    // Task 11 review) — render() already needs `counts` for the onlyFindings composition, and
+    // attachFindings is a pure function of the same (allRows, latestFindings) pair paintFindings
+    // would otherwise recompute a second time in the same tick for no reason.
+    const attached = attachFindings(allRows, latestFindings);
+    const findingsFiltered = onlyFindings ? filtered.filter((r) => attached.counts.has(r.id)) : filtered;
     const visible = collapseFilter(findingsFiltered, collapsedGroups);
     const expandedRow = rowForSelection(allRows, state.selection);
     const expandedId = expandedRow ? expandedRow.id : null;
 
     const addParamAfterIndex = addAfterIndex(visible, 'group:parameters', collapsedGroups);
+
+    // Review fix (Minor, Task 11 review): filterRows/onlyFindings narrowing the row list all the way
+    // to zero (nothing matches the text query, or onlyFindings has nothing to show) previously left
+    // an unexplained blank panel — ambiguous between "nothing is broken" and "the view itself is
+    // broken". One shared empty-state line covers both causes identically (structurally, `visible`
+    // can only be empty when a filter excluded every row including every group header — collapsing a
+    // group never removes the group's own header row, only its children, so collapse alone can never
+    // produce this).
+    if (visible.length === 0) {
+      list.appendChild(h('p', { class: 'insp-empty' }, 'No rows match the current filter.'));
+    }
 
     visible.forEach((row, i) => {
       // Review fix (Important, Task 10 review): only GROUP headers are individually collapsible
@@ -1077,8 +1159,9 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
     // Paints dots/counts/inline messages/residual list onto the row list just built above — a DOM
     // patch only (see paintFindings' own doc), so it's safe to call unconditionally at the end of
     // every structural render, keeping findings visible immediately rather than blank for up to
-    // 300ms until the next debounced check() happens to fire.
-    paintFindings();
+    // 300ms until the next debounced check() happens to fire. Passes `attached` (computed above,
+    // for the onlyFindings composition) rather than letting paintFindings recompute it.
+    paintFindings(attached);
 
     if (pendingFocusEl) {
       const toFocus = pendingFocusEl;
