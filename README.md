@@ -88,8 +88,9 @@ Markov transition, or a tree re-parent).
 (delete, rename, tidy position, add child/sibling in a tree, enter a sub-model, and so on).
 It's the mouse route to deletion now that there's no Delete tool.
 
-**View controls.** The wheel / two-finger scroll pans; ⌘-scroll (or trackpad pinch) zooms
-toward the cursor. Four corner buttons on the canvas: zoom out, zoom in, **Fit to view** (frame
+**View controls.** The wheel / two-finger scroll pans; Ctrl- or ⌘-scroll (or trackpad pinch,
+which arrives as Ctrl+wheel) zooms toward the cursor. Four corner buttons on the canvas: zoom
+out, zoom in, **Fit to view** (frame
 every node), and **Tidy** (clears hand-placed positions so the auto-layout takes over again —
 whole model from the button, a single node from its context menu). Keyboard: **⌘0** fits,
 **⌘+**/**⌘−** zoom.

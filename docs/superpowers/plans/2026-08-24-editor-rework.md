@@ -1379,11 +1379,11 @@ git push
 
 Replace the four-tool description with the gesture table from the spec's §1, the new view controls, and the outline sidebar. Anything describing Select/Add/Connect/Delete or the Selection/Parameters/Settings tabs is now wrong — grep for `tool`, `Selection tab`, `Parameters tab` and fix every hit.
 
-- [x] **Step 2: Full-suite and cross-browser smoke**
+- [x] **Step 2: Full-suite and cross-browser smoke** — Chrome only; Safari/Firefox not run, no automation path in this environment — see task-12-report.md
 
 `npm test` — every test green. Then in Chrome, on both `examples/hiv.yaml` (markov) and `examples/surgery.yaml` (tree): build a small model from scratch using only canvas gestures, run it, confirm the results drawer still works, undo back to the start, redo forward. Then check the YAML pane round-trips everything the new gestures produced, and that the Validation tab's click-through still selects and reveals. Repeat the pointer gestures once in Safari and once in Firefox — pointer capture and `contextmenu` differ between engines and this round leans on both.
 
-- [x] **Step 3: Deploy and confirm live**
+- [ ] **Step 3: Deploy and confirm live** — skipped: cancelled by the controller, unmerged branch; deploy is the owner's decision after merge
 
 ```bash
 netlify deploy --prod --dir . --site 4c526e64-937b-4c3a-a548-f701d9804a56
@@ -1391,7 +1391,7 @@ netlify deploy --prod --dir . --site 4c526e64-937b-4c3a-a548-f701d9804a56
 
 Hard-reload `https://econeval.netlify.app` and repeat the smoke walk against production — `js/` is cached aggressively, so a soft reload can show the old bundle and hide a broken deploy.
 
-- [x] **Step 4: Commit and push**
+- [x] **Step 4: Commit and push** — committed (`a0ef68e`); not pushed — controller pushes after review, per this task's instructions
 
 ```bash
 git add README.md docs/superpowers/plans/2026-08-24-editor-rework.md
