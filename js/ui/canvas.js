@@ -1,9 +1,8 @@
 // SVG canvas renderer for econeval models.
 //
 // Two halves, per constraints.md ("DOM modules ... hold no business logic"):
-//   1. Pure geometry (exported + covered by test/canvas-model.test.js): NODE_R, edgePath,
-//      selfLoopPath, edgeLabelPos, scopedStore. None of these touch the DOM — safe to import
-//      from node:test.
+//   1. Pure geometry (moved to canvas/geometry.js, covered by test/canvas-geometry.test.js):
+//      geometry helpers, shape descriptors, hit-testing, snap-to-grid, fit-box. None touch DOM.
 //   2. createCanvas(svgEl, store, {layoutFor}) — the DOM-heavy renderer. Reads store.get().model
 //      (or, once a sub-model has been entered, model.models[name] via the same currentModelPath
 //      chase), positions nodes via the injected layoutFor, and re-renders in full on every
@@ -24,92 +23,16 @@ import {
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
-// ---------------------------------------------------------------------------------------------
-// Node vocabulary sizes (design tokens doc: "markov state = circle r 26; tree decision root =
-// square; chance = circle; terminal = short vertical end-bar; sub-model attachment = stadium
-// double-stroke"). Exported where a consumer (Task 10's hit-testing/Add tool) plausibly needs the
-// same radius used here.
-// ---------------------------------------------------------------------------------------------
+// Geometry and constants moved to canvas/geometry.js (Task 3).
+import {
+  NODE_R, ROOT_HALF, TERMINAL_HALF, STADIUM_W, STADIUM_H, STADIUM_INSET, HALO_GAP,
+  SELF_LOOP_SPREAD, SELF_LOOP_HEIGHT, BASE_W, BASE_H,
+  edgePath, selfLoopPath, selfLoopLabelPos, edgeLabelPos,
+} from './canvas/geometry.js';
 
-export const NODE_R = 26;          // markov state circle, and tree chance-node circle
-const ROOT_HALF = 26;              // tree decision root: square, side = ROOT_HALF*2 (52) — same
-                                    // footprint as the circle so root/chance read as one family
-const TERMINAL_HALF = 15;          // tree terminal: vertical end-bar, half-length
-const STADIUM_W = 120;             // tree sub-model attachment: stadium (pill) width
-const STADIUM_H = 32;              // stadium height
-const STADIUM_INSET = 3;           // inner stroke inset, for the "double stroke" look
-const HALO_GAP = 4;                // selection halo: extra offset beyond the node's own edge
 const LABEL_MAX = 14;              // edge-label truncation length (brief: "max 14 chars + ...")
-const SELF_LOOP_SPREAD = Math.PI / 6;  // self-loop anchors sit +-30deg either side of top (-90deg)
-const SELF_LOOP_HEIGHT = 2;            // bezier control-point offset above the anchors, as a
-                                        // multiple of the node radius
-const BASE_W = 900;                // default viewBox width at zoom 1
-const BASE_H = 640;                // default viewBox height at zoom 1
 const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 2.5;
-
-// ---------------------------------------------------------------------------------------------
-// Pure geometry helpers (exported + tested).
-// ---------------------------------------------------------------------------------------------
-
-// edgePath(from, to, r) -> 'd' attribute string for a straight edge from one node's rim to the
-// other's, i.e. the raw center-to-center line trimmed by `r` at BOTH ends (so it starts/ends on
-// the node circles rather than at their centers, leaving room for an arrowhead marker drawn via
-// marker-end on the <path> the caller builds from this string). from/to are [x, y] pairs.
-export function edgePath(from, to, r) {
-  const [x1, y1] = from;
-  const [x2, y2] = to;
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  const len = Math.hypot(dx, dy);
-  if (len === 0) return `M ${x1} ${y1} L ${x2} ${y2}`; // degenerate: coincident points
-  const ux = dx / len;
-  const uy = dy / len;
-  const sx = x1 + ux * r;
-  const sy = y1 + uy * r;
-  const ex = x2 - ux * r;
-  const ey = y2 - uy * r;
-  return `M ${sx} ${sy} L ${ex} ${ey}`;
-}
-
-// selfLoopPath(xy, r) -> 'd' attribute string for a small loop that leaves the node's circle just
-// above-left of top, arcs up and over, and re-enters just above-right of top — both anchor points
-// lie exactly on the circle (distance r from the center), so the loop reads as attached to the
-// node rather than floating near it. xy is the node's [x, y] center.
-export function selfLoopPath(xy, r) {
-  const [cx, cy] = xy;
-  const a0 = -Math.PI / 2 - SELF_LOOP_SPREAD;
-  const a1 = -Math.PI / 2 + SELF_LOOP_SPREAD;
-  const x0 = cx + r * Math.cos(a0);
-  const y0 = cy + r * Math.sin(a0);
-  const x1 = cx + r * Math.cos(a1);
-  const y1 = cy + r * Math.sin(a1);
-  const h = r * SELF_LOOP_HEIGHT;
-  return `M ${x0} ${y0} C ${x0} ${y0 - h} ${x1} ${y1 - h} ${x1} ${y1}`;
-}
-
-// Label anchor for a self-loop: above the loop's own apex, so it never overlaps the arc.
-function selfLoopLabelPos(xy, r) {
-  const [cx, cy] = xy;
-  return [cx, cy - r - r * SELF_LOOP_HEIGHT - 6];
-}
-
-// edgeLabelPos(from, to) -> [x, y]: the midpoint of the two points, offset 10px perpendicular to
-// the line — always to the same side (rotate the edge vector -90deg, i.e. (dy, -dx) normalized),
-// so a label sits consistently "above" a left-to-right edge rather than flipping sides
-// unpredictably depending on edge direction.
-export function edgeLabelPos(from, to) {
-  const [x1, y1] = from;
-  const [x2, y2] = to;
-  const mx = (x1 + x2) / 2;
-  const my = (y1 + y2) / 2;
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  const len = Math.hypot(dx, dy) || 1;
-  const px = dy / len;
-  const py = -dx / len;
-  return [mx + px * 10, my + py * 10];
-}
 
 function truncateLabel(s, max = LABEL_MAX) {
   const str = String(s);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { edgePath, selfLoopPath, edgeLabelPos, NODE_R } from '../js/ui/canvas.js';
+import { edgePath, selfLoopPath, edgeLabelPos, NODE_R } from '../js/ui/canvas/geometry.js';
 import { scopedStore } from '../js/ui/scoped-store.js';
 import { createStore } from '../js/ui/store.js';
 import { addState } from '../js/ui/ops.js';
