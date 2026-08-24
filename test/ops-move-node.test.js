@@ -90,3 +90,26 @@ test('the result round-trips through serialize/parse', () => {
   const m2 = ops.moveNode(M(), ['Root', 'B'], ['Root', 'A']);
   assert.deepEqual(parseModel(serializeModel(m2)), m2);
 });
+
+test('dropping a node onto its own parent is a no-op', () => {
+  const m = M();
+  const m2 = ops.moveNode(m, ['Root', 'A', 'Win'], ['Root', 'A']);
+  assert.deepEqual(ops.nodeAt(m2, ['Root', 'A']).children.map((c) => c.name), ['Win', 'Lose']);
+  assert.deepEqual(m2.layout, m.layout);
+});
+
+test('a distinct numeric p value is preserved when moving', () => {
+  const m1 = parseModel(`
+econeval: 1
+type: tree
+name: t
+tree:
+  Root:
+    A:
+      Preserve: {p: 0.5, utility: 10}
+    B:
+      Keep: {p: rest, utility: 5}
+`);
+  const m2 = ops.moveNode(m1, ['Root', 'A', 'Preserve'], ['Root', 'B']);
+  assert.equal(ops.nodeAt(m2, ['Root', 'B', 'Preserve']).p, 0.5);
+});

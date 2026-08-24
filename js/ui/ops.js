@@ -407,6 +407,12 @@ export function moveNode(model, path, newParentPath) {
     throw new Error('moveNode: a node cannot be moved into its own descendant');
 
   const m = clone(model);
+
+  // Dropped onto the parent it already has: a no-op, not a collision. Without this the sibling-name
+  // scan below would find the node itself (it has not been spliced out yet) and throw a false
+  // "already exists". Same idiom renameState/renameNode use for renaming to the current name.
+  if (path.slice(0, -1).join('/') === newParentPath.join('/')) return m;
+
   const node = nodeAt(m, path);                       // validates path
   const newParent = nodeAt(m, newParentPath);         // validates destination
   const oldParent = nodeAt(m, path.slice(0, -1));
