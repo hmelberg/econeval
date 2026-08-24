@@ -1,0 +1,63 @@
+econeval: 1
+type: tree
+name: Screening with a Markov continuation
+
+# A decision tree whose terminals hand off to markov sub-models: the tree decides WHICH
+# continuation a cohort enters, and the sub-model in `models:` below plays out the rest of the
+# lifetime. Double-click a stadium-shaped terminal (or click a SUB-MODELS row in the sidebar) to
+# drill the canvas into one; the outline's STRUCTURE group follows.
+
+settings:
+  cycles: 20
+  cycle: 1 year
+  discount: {cost: 0.035, effect: 0.035}
+  wtp: 30000
+
+params:
+  p_detect:
+    value: 0.7
+    low: 0.6
+    high: 0.8
+    dist: beta(70, 30)
+    source: Assumed
+  c_screen: {value: 250}
+  u_well: {value: 0.9}
+
+tree:
+  Screen?:                        # root = decision node; its children are the strategies
+    Screening:
+      cost: c_screen
+      Detected: {p: p_detect, model: early}
+      Missed: {p: rest, model: late}
+    No screening:
+      Detected: {p: 0.1, model: early}
+      Missed: {p: rest, model: late}
+
+models:
+  early:                          # caught early: slower progression, cheaper sick state
+    type: markov
+    settings:
+      cycles: 20
+      start: well
+    states:
+      well: {cost: 200, utility: u_well}
+      sick: {cost: 3000, utility: 0.6}
+      dead: {cost: 0, utility: 0}
+    transitions:
+      well: {well: rest, sick: 0.03, dead: 0.01}
+      sick: {sick: rest, dead: 0.15}
+      dead: {dead: 1}
+
+  late:                           # caught late: faster progression, costlier sick state
+    type: markov
+    settings:
+      cycles: 20
+      start: well
+    states:
+      well: {cost: 200, utility: u_well}
+      sick: {cost: 6000, utility: 0.45}
+      dead: {cost: 0, utility: 0}
+    transitions:
+      well: {well: rest, sick: 0.12, dead: 0.01}
+      sick: {sick: rest, dead: 0.30}
+      dead: {dead: 1}

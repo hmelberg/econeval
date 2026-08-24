@@ -1,4 +1,5 @@
 [
   {"file": "hiv.yaml", "name": "HIV combination therapy (Chancellor 1997)"},
-  {"file": "surgery.yaml", "name": "Surgery vs medication (tree)"}
+  {"file": "surgery.yaml", "name": "Surgery vs medication (tree)"},
+  {"file": "screening.yaml", "name": "Screening with a Markov continuation (sub-models)"}
 ]
