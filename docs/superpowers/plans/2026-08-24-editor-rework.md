@@ -804,12 +804,17 @@ The pointer gesture carries `{target, startClientX, startClientY, startViewX, st
 
 - **pointerdown on background** — `flush()`, start a pan gesture. On pointerup with `moved === false`: a plain click deselects; the hand-rolled double-click detector (reuse `lastDown`/`DOUBLE_CLICK_MS`, keyed on the string `'background'`) fires `createAt(cur)`.
 - **pointerdown on a node** — `flush()`, re-resolve the entry from `getNodeIndex()` (it may have moved under us), record `grabDX/grabDY = xy - cursor` so the node keeps its grab offset, and clone the node's `<g>` into `ghostNodeEl` with class `drag-ghost`. Double-click still renames, or drills into a sub-model.
-- **pointermove** — set `moved` past a 3px threshold. Set `leftSource` the first time `!isInside(cur, source.xy, source.hit)`. Then decide which preview to show:
+- **pointermove** — set `moved` past a 3px threshold. Set `leftSource` the first time `!isInside([cur.x, cur.y], source.xy, source.hit)`. Then decide which preview to show:
 
 ```js
+// clientToUser returns {x, y}; geometry.js indexes points as [x, y] arrays. Convert ONCE, here —
+// passing the object straight through makes every distance NaN and every hit silently miss, which
+// is exactly the regression the Task 4 review caught. isInside now throws on a malformed point, so
+// getting this wrong is loud rather than silent, but convert anyway.
+const p = [cur.x, cur.y];
 const forceArrow = spaceHeld;
 const forceMove = e.altKey;
-const over = pickNode(cur, getNodeIndex());
+const over = pickNode(p, getNodeIndex());
 const target = over && (over !== source || gesture.leftSource) ? over : null;
 const connecting = !forceMove && (forceArrow || target !== null);
 ```
@@ -821,7 +826,8 @@ const connecting = !forceMove && (forceArrow || target !== null);
 function endNodeGesture(g, cur, e) {
   const model = getModel();
   const source = g.target;
-  const over = pickNode(cur, getNodeIndex());
+  const p = [cur.x, cur.y];              // clientToUser gives {x, y}; geometry wants [x, y]
+  const over = pickNode(p, getNodeIndex());
   const target = over && (over !== source || g.leftSource) ? over : null;
   const connecting = !e.altKey && (spaceHeld || target !== null);
   const store = getActiveStore();
