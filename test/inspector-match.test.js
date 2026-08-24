@@ -9,7 +9,8 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { scopePrefix, nodePathToCheckPath, splitFindings, countByLevel } from '../js/ui/inspector.js';
+import { scopePrefix, nodePathToCheckPath } from '../js/ui/outline/build.js';
+import { splitFindings, countByLevel } from '../js/ui/inspector.js';
 import { parseModel } from '../js/core/model.js';
 import { check } from '../js/analysis/check.js';
 

@@ -42,27 +42,14 @@ import { check } from '../analysis/check.js';
 import { scopedStore } from './scoped-store.js';
 import { loadLayout, saveLayout } from './panels.js';
 import * as ops from './ops.js';
+import { scopePrefix, nodePathToCheckPath } from './outline/build.js';
 
 // ================================================================================================
 // ---------- Pure helpers (exported + tested in test/inspector-match.test.js) ----------
 // ================================================================================================
 
-// scopePrefix(['a','b']) -> 'models.a.models.b.' — matches checkModelContent's own recursive
-// pathPrefix building (js/analysis/check.js) exactly, since selection.modelPath segments are
-// `models:` registry keys chained the same way (canvas.js's currentModelPath/scopedStore).
-export function scopePrefix(modelPath) {
-  return (modelPath ?? []).map((name) => `models.${name}.`).join('');
-}
-
-// check.js's tree-content paths start at 'tree' and OMIT the root node's own name (walkTreeNode is
-// first called with path=`${pathPrefix}tree` for the root itself, then `${path}.${child.name}` for
-// each descendant) — different from ops.nodeAt's path convention (root name included at path[0])
-// and from the layout-key convention (root name included, '/'-joined). This is the one place those
-// three conventions actually diverge; converts an ops-style node path to check.js's convention.
-export function nodePathToCheckPath(path) {
-  const rest = (path ?? []).slice(1);
-  return rest.length ? `tree.${rest.join('.')}` : 'tree';
-}
+// Re-export helpers from outline/build.js (they're tested there and used here)
+export { scopePrefix, nodePathToCheckPath };
 
 export function countByLevel(findings) {
   let errors = 0;
