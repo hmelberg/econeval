@@ -24,9 +24,11 @@
 // from geometry.hitShapeFor. Task 5 deleted the toolbar entirely (modes were friction — see the
 // design spec's "What and why") and moved the gesture logic into canvas/gestures.js.
 
-import { renameState, deleteState, deleteTransition, renameNode, deleteNode } from '../ops.js';
+import {
+  renameState, deleteState, deleteTransition, renameNode, deleteNode, setLayout, clearLayout,
+} from '../ops.js';
 
-import { BASE_W, BASE_H } from './geometry.js';
+import { BASE_W, BASE_H, GRID, fitBox } from './geometry.js';
 import { el, buildSvg } from './render.js';
 import { createGestures } from './gestures.js';
 
@@ -53,6 +55,7 @@ function clamp(v, lo, hi) {
 export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
   const breadcrumbEl = typeof document !== 'undefined' ? document.getElementById('breadcrumb') : null;
   const toastEl = typeof document !== 'undefined' ? document.getElementById('canvas-toast') : null;
+  const toolbarEl = typeof document !== 'undefined' ? document.getElementById('canvas-toolbar') : null;
 
   const currentModelPath = []; // names into .models, chained; [] = the top-level model itself
 
@@ -204,6 +207,49 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
     }
   }
 
+  // Resolves the CURRENT selection to its nodeIndex entry (the shape startRename/setLayout need:
+  // {kind, key|path, xy, ...}) — an edge selection has no such entry (nodeIndex only carries
+  // 'state'/'node' entries; a tree "edge" IS its child node's selection), so this returns null for
+  // one, which both callers below treat as a no-op rather than an error.
+  function findSelectedEntry(selection) {
+    if (selection.kind === 'state') return nodeIndex.find((n) => n.kind === 'state' && n.key === selection.id);
+    if (selection.kind === 'node') return nodeIndex.find((n) => n.kind === 'node' && arraysEqual(n.path, selection.id));
+    return null;
+  }
+
+  // Enter: open the inline rename for the selected node. No-op for an edge selection (no node to
+  // rename) or a selection not visible in the scope currently on screen.
+  function renameSelection() {
+    const { selection } = store.get();
+    if (!selection || selection.kind == null) return;
+    if (!sameModelPath(selection.modelPath, currentModelPath)) return;
+    const entry = findSelectedEntry(selection);
+    if (!entry) return;
+    startRename(entry);
+  }
+
+  // Arrow keys: nudge the selected node by one GRID step (four with Shift) as a single setLayout
+  // op — one keypress, one undo entry, the deliberate granularity for a deliberate key press. No-op
+  // for an edge selection (no position) or a selection not visible in this scope.
+  const NUDGE_DELTA = {
+    ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0],
+  };
+
+  function nudgeSelection(key, big) {
+    const { selection } = store.get();
+    if (!selection || selection.kind == null) return;
+    if (!sameModelPath(selection.modelPath, currentModelPath)) return;
+    flush();
+    const entry = findSelectedEntry(selection);
+    if (!entry) return; // edge selection (no position), or vanished under the flush() above
+    const step = (big ? GRID * 4 : GRID);
+    const [ux, uy] = NUDGE_DELTA[key];
+    const at = [entry.xy[0] + ux * step, entry.xy[1] + uy * step];
+    const layoutKey = entry.kind === 'state' ? entry.key : entry.path.join('/');
+    const activeStore = scopedStoreFor(store, currentModelPath);
+    runOp(activeStore, (m) => setLayout(m, layoutKey, at));
+  }
+
   if (typeof document !== 'undefined') {
     document.addEventListener('keydown', (e) => {
       // Review fix (Important): a modal <dialog> (New/Open/Examples) owns keyboard input while
@@ -213,8 +259,28 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
       if (document.querySelector('dialog[open]')) return;
       if (isTypingTarget(e.target)) return;
       if (e.key === 'Escape') { e.preventDefault(); escapeAll(); return; }
-      if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelection(); }
+      if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelection(); return; }
       // Task 5 removed the V/A/C/D tool-switch arm here — the toolbar it drove no longer exists.
+
+      // Task 6: view shortcuts, gated on meta/ctrl so they never collide with a plain keypress.
+      // Every OTHER meta/ctrl chord (notably ⌘Z/⌘Y/⌘S/⌘Enter) is left completely untouched — no
+      // preventDefault, no return-with-side-effect — so app.js's own window-level keydown handler
+      // (registered separately; this one never calls stopPropagation) still sees it.
+      if (e.metaKey || e.ctrlKey) {
+        if (e.key === '0') { e.preventDefault(); fitToView(); }
+        else if (e.key === '=' || e.key === '+') { e.preventDefault(); zoomAtCentre(1.1); }
+        else if (e.key === '-') { e.preventDefault(); zoomAtCentre(1 / 1.1); }
+        return; // whether matched above or not: a meta/ctrl chord is never also an editing key below
+      }
+
+      // Task 7: keyboard editing of the current selection — Enter renames, arrows nudge by one
+      // grid step (four with Shift). Both apply only when the selection is visible in the scope
+      // currently on screen (sameModelPath), the same rule deleteSelection above already uses.
+      if (e.key === 'Enter') { e.preventDefault(); renameSelection(); return; }
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        e.preventDefault();
+        nudgeSelection(e.key, e.shiftKey);
+      }
     });
   }
 
@@ -341,8 +407,7 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
     });
   }
 
-  // -------- wheel zoom to cursor (Task 5 leaves this unchanged; Task 6 flips wheel to pan and
-  // moves zoom behind ctrl/meta+wheel) --------
+  // -------- pan/zoom to cursor, fit to view, tidy layout (Task 6) --------
 
   function clientToUser(clientX, clientY) {
     if (typeof svgEl.createSVGPoint !== 'function' || typeof svgEl.getScreenCTM !== 'function') {
@@ -355,6 +420,85 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
     if (!ctm) return { x: clientX, y: clientY };
     const p = pt.matrixTransform(ctm.inverse());
     return { x: p.x, y: p.y };
+  }
+
+  // zoomAt: the shared zoom-toward-a-client-point primitive — pinch (ctrl/meta+wheel) and the
+  // toolbar/keyboard shortcuts (which zoom toward the canvas's own centre, via zoomAtCentre below)
+  // both route through this one function so their math can never drift apart.
+  function zoomAt(clientX, clientY, factor) {
+    const newZoom = clamp(zoom * factor, ZOOM_MIN, ZOOM_MAX);
+    if (newZoom === zoom) return;
+    const { x: ux, y: uy } = clientToUser(clientX, clientY);
+    // Scale the CURRENT view.w/view.h, not BASE_W/BASE_H — deliberate departure from the
+    // pre-Task-6 formula (which rebuilt w/h from scratch as BASE_W/newZoom, BASE_H/newZoom every
+    // time). That was fine while zoomAt was the only thing that ever touched w/h, so view.w:view.h
+    // never left the BASE_W:BASE_H ratio. fitToView (below) breaks that invariant on purpose — it
+    // fits the viewBox tightly to the content's own bounding box, whatever its aspect ratio. Scaling
+    // from BASE_W/BASE_H after a Fit snapped the aspect ratio back toward BASE_W:BASE_H on the very
+    // next zoom (wheel or button), a visible jump discovered in browser verification. Scaling the
+    // CURRENT w/h instead preserves whatever aspect ratio is on screen — Fit's tight fit included —
+    // while `zoom` itself is still tracked the same way, so ZOOM_MIN/ZOOM_MAX stays meaningful.
+    const scale = zoom / newZoom;
+    const newW = view.w * scale;
+    const newH = view.h * scale;
+    view.x = ux - (ux - view.x) * scale;
+    view.y = uy - (uy - view.y) * scale;
+    view.w = newW;
+    view.h = newH;
+    zoom = newZoom;
+    applyViewBox();
+  }
+
+  // The toolbar zoom buttons and ⌘+/⌘0/⌘- have no cursor position to zoom toward the way
+  // wheel/pinch does — zoom toward the canvas's own on-screen centre instead.
+  function zoomAtCentre(factor) {
+    const rect = svgEl.getBoundingClientRect();
+    zoomAt(rect.left + rect.width / 2, rect.top + rect.height / 2, factor);
+  }
+
+  // Fit to view (⌘0 / the toolbar button): reframe the viewBox around every node's CURRENT
+  // position in the scope on screen (fitBox's own 60px pad; an empty model falls back to the base
+  // viewBox) and reset zoom to match, so the wheel/pinch zoom clamp (ZOOM_MIN/ZOOM_MAX, expressed
+  // relative to BASE_W) stays meaningful immediately afterwards.
+  function fitToView() {
+    const box = fitBox(Object.values(layoutFor(resolveActiveModel() ?? {})), 60);
+    view.x = box.x; view.y = box.y; view.w = box.w; view.h = box.h;
+    zoom = BASE_W / box.w;
+    applyViewBox();
+  }
+
+  // Tidy layout (the toolbar button): drop every explicit position in the current scope's
+  // model.layout, handing positioning back to layouts.js's auto-layout. flush() first (op-producing
+  // gesture) and one runOp = one undo entry, same rule as every other op-producing action here.
+  function tidyLayout() {
+    flush();
+    const activeStore = scopedStoreFor(store, currentModelPath);
+    runOp(activeStore, (m) => clearLayout(m));
+  }
+
+  function makeToolbarButton(id, glyph, label) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.id = id;
+    btn.textContent = glyph;
+    btn.setAttribute('aria-label', label);
+    btn.title = label;
+    return btn;
+  }
+
+  // The four view-control buttons, appended as siblings into #canvas-toolbar. panels.js's
+  // initPanels() runs before createCanvas() (see js/ui/app.js) and has already written its own
+  // maximize button into this same node — append only, never clear/replace it.
+  if (toolbarEl) {
+    const zoomOutBtn = makeToolbarButton('view-zoom-out', '−', 'Zoom out');
+    const zoomInBtn = makeToolbarButton('view-zoom-in', '+', 'Zoom in');
+    const fitBtn = makeToolbarButton('view-fit', '⤢', 'Fit to view');
+    const tidyBtn = makeToolbarButton('view-tidy', '⌗', 'Tidy layout');
+    zoomOutBtn.addEventListener('click', () => zoomAtCentre(1 / 1.1));
+    zoomInBtn.addEventListener('click', () => zoomAtCentre(1.1));
+    fitBtn.addEventListener('click', fitToView);
+    tidyBtn.addEventListener('click', tidyLayout);
+    toolbarEl.append(zoomOutBtn, zoomInBtn, fitBtn, tidyBtn);
   }
 
   // The gesture state machine itself (canvas/gestures.js, Task 5): owns pointerdown/move/up/cancel
@@ -378,19 +522,17 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
     getScopedSelection: scopedSelection,
   });
 
+  // Plain wheel / two-finger trackpad scroll pans; ctrl/meta+wheel zooms to the cursor (a
+  // trackpad pinch arrives as ctrl+wheel — the platform convention this flips wheel to match).
   svgEl.addEventListener('wheel', (e) => {
     e.preventDefault();
-    const { x: ux, y: uy } = clientToUser(e.clientX, e.clientY);
-    const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
-    const newZoom = clamp(zoom * factor, ZOOM_MIN, ZOOM_MAX);
-    if (newZoom === zoom) return;
-    const newW = BASE_W / newZoom;
-    const newH = BASE_H / newZoom;
-    view.x = ux - (ux - view.x) * (newW / view.w);
-    view.y = uy - (uy - view.y) * (newH / view.h);
-    view.w = newW;
-    view.h = newH;
-    zoom = newZoom;
+    if (e.ctrlKey || e.metaKey) {
+      zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.1 : 1 / 1.1);
+      return;
+    }
+    const rect = svgEl.getBoundingClientRect();
+    view.x += e.deltaX * (rect.width ? view.w / rect.width : 1);
+    view.y += e.deltaY * (rect.height ? view.h / rect.height : 1);
     applyViewBox();
   }, { passive: false });
 
