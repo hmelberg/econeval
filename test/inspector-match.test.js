@@ -3,7 +3,7 @@
 // (splitFindings, countByLevel). The DOM-heavy half of inspector.js (createInspector itself) is
 // exercised by manual verification only, per constraints.md ("Pure logic ... lives in DOM-free
 // modules with tests; DOM modules ... hold no business logic" — importing js/ui/inspector.js here
-// is safe: it also imports js/ui/canvas.js and js/ui/panels.js, both of which are already proven
+// is safe: it also imports js/ui/canvas/index.js and js/ui/panels.js, both of which are already proven
 // Node-import-safe by test/canvas-model.test.js and test/panels.test.js — nothing at module-load
 // time touches `document`).
 

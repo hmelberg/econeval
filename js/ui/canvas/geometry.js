@@ -100,7 +100,17 @@ function insideStadium(dx, dy, w, h, slack) {
   return Math.hypot(dx - cx, dy) <= r + slack;
 }
 
+// `point` must be a [x, y] array, matching every other coordinate pair in this module (edgePath,
+// selfLoopPath, ...) — NOT an {x, y} object. This is deliberately strict rather than duck-typed:
+// point[0]/point[1] on an {x, y} object are silently `undefined`, every distance below becomes
+// NaN, every `NaN <= ...` comparison is false, and pickNode would return null unconditionally —
+// a hit-test that always misses, with no error anywhere. Per this repo's standing rule ("errors
+// surfaced, never swallowed"), that failure mode must throw instead of silently discarding every
+// click (task-4 review: this exact shape mismatch reached production once already).
 export function isInside(point, xy, hit, slack = HIT_SLACK) {
+  if (!Array.isArray(point) || point.length !== 2 || !Number.isFinite(point[0]) || !Number.isFinite(point[1])) {
+    throw new Error(`isInside: point must be a [x, y] array of two finite numbers, got ${JSON.stringify(point)}`);
+  }
   const dx = point[0] - xy[0];
   const dy = point[1] - xy[1];
   if (hit.shape === 'circle') return Math.hypot(dx, dy) <= hit.r + slack;

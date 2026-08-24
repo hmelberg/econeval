@@ -33,7 +33,7 @@ import {
 import { BASE_W, BASE_H, edgePath, pickNode } from './geometry.js';
 import { el, buildSvg, treeTrimRadius } from './render.js';
 
-import { scopedStore, scopedStoreFor } from '../scoped-store.js';
+import { scopedStoreFor } from '../scoped-store.js';
 
 const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 2.5;
@@ -470,12 +470,14 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
     const model = activeStore.get().model;
     if (!model) return;
     if (model.type === 'markov') {
-      const target = pickNode(cur, nodeIndex);
+      const target = pickNode([cur.x, cur.y], nodeIndex); // pickNode indexes point[0]/point[1] — an
+                                                            // {x,y} object here silently NaNs every
+                                                            // distance and always returns null
       if (!target) return; // dropped on empty space: silently cancel (no gesture-level self-loop
                             // ban — A->A IS allowed; ops.addTransition is what actually validates it)
       runOp(activeStore, (m) => addTransition(m, fromTarget.key, target.key));
     } else if (model.type === 'tree') {
-      const target = pickNode(cur, nodeIndex);
+      const target = pickNode([cur.x, cur.y], nodeIndex);
       if (target) { showToast('trees are trees'); return; } // dropped on an existing node: invalid
       runOp(activeStore, (m) => addChild(m, fromTarget.path));
     }

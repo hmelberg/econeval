@@ -241,8 +241,8 @@ const results = createResults(document.getElementById('pane-results'), store, {
   plotly: window.Plotly,
   selectOnCanvas: (sel) => {
     // Item 4 (final-review, ruling): open the sub-model's scope on canvas FIRST — canvas.openScope
-    // sets currentModelPath and re-renders, so the halo-matching check inside canvas.js's own
-    // render sees the right scope by the time store.select's notification arrives just below.
+    // sets currentModelPath and re-renders, so the halo-matching check inside canvas/index.js's
+    // own render sees the right scope by the time store.select's notification arrives just below.
     canvas.openScope(sel.modelPath ?? []);
     store.select(sel);
     inspector.setActiveTab('selection');

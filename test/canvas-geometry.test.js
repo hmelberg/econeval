@@ -17,6 +17,17 @@ test('hitShapeFor throws on unrecognized node kind', () => {
   assert.throws(() => hitShapeFor('circle'), /unrecognized node kind/);
 });
 
+test('isInside throws on a non-[x,y]-array point instead of silently NaN-ing every distance', () => {
+  // Regression (task-4 review): connectDrop once passed pickNode/isInside an {x, y} object (from
+  // clientToUser) instead of a [x, y] array. point[0]/point[1] on that object are undefined, every
+  // distance becomes NaN, every `NaN <= ...` is false, and the hit test always misses with no error
+  // anywhere -- markov Connect-drag silently could never create a transition. "Errors surfaced,
+  // never swallowed" means this shape mismatch must throw, not return a wrong answer.
+  const c = hitShapeFor('state');
+  assert.throws(() => isInside({ x: 1, y: 2 }, [0, 0], c), /must be a \[x, y\] array/);
+  assert.throws(() => isInside([1], [0, 0], c), /must be a \[x, y\] array/);
+});
+
 test('circle hit: inside, on the rim, inside the slack, outside', () => {
   const c = hitShapeFor('state');   // r 26, slack 6
   assert.equal(isInside([100, 100], [100, 100], c), true);
