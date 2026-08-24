@@ -90,11 +90,25 @@ export function createContextMenu() {
     // Capture runs first and stopPropagation() here cuts the event off before it can reach that
     // bubble-phase handler at all (this is the one thing the brief calls out explicitly: Escape
     // closing the menu must not also cancel a rename/gesture or deselect underneath it).
+    // Delete/Backspace get the SAME capture-phase protection Escape gets (review fix, Finding 6,
+    // final review). index.js's document-level handler guards only on `dialog[open]` and
+    // isTypingTarget — neither matches this menu, whose focused element is a
+    // <button role="menuitem"> — so pressing Delete while the menu was open deleted the selection
+    // sitting behind it. Swallowed rather than treated as "close and then delete": the keypress was
+    // aimed at a menu, and a destructive action must never be the thing that falls out of an
+    // ambiguous one. The menu stays open (Escape remains the way to dismiss it), and
+    // preventDefault() also stops Backspace's legacy navigate-back default.
     const onKeyDown = (e) => {
-      if (e.key !== 'Escape') return;
-      e.preventDefault();
-      e.stopPropagation();
-      close();
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        close();
+        return;
+      }
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        e.stopPropagation();
+      }
     };
     // Also capture-phase, so an outside right-click (which itself opens a NEW menu) is detected
     // reliably even if something between here and the target would otherwise stop the event —

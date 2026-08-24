@@ -27,7 +27,25 @@ export function nodePathToCheckPath(path) {
 // ================================================================================================
 
 /**
- * buildOutline(model, modelPath = []) -> Row[]
+ * buildOutline(model, modelPath = [], topModel = model) -> Row[]
+ *
+ * `model` is the model whose STRUCTURE is listed — the sub-model the canvas is currently drilled
+ * into, reached by chasing `modelPath` through the `models:` registries. `modelPath` is that scope
+ * ([] = the top-level model itself); it scopes both each structure row's `sel.modelPath` and its
+ * check paths (via scopePrefix). `topModel` is the DOCUMENT root, and is where the SUB-MODELS,
+ * PARAMETERS and SETTINGS groups come from, always unprefixed.
+ *
+ * That third argument is the whole point of the split (design spec §3, "Scope"): STRUCTURE follows
+ * the canvas scope and edits through the scopedStore chain, while PARAMETERS and SETTINGS stay
+ * top-level in v1 (a sub-model's own params are edited through the YAML pane) and SUB-MODELS is
+ * "one row per entry in the TOP-LEVEL models: registry ... so the outline is a map of the whole
+ * document, not just the visible scope". One call therefore has to mix rows from two different
+ * models, which is exactly what the (scoped model, scope, top model) triple expresses.
+ *
+ * It defaults to `model` so the common top-level call stays `buildOutline(model)` and every
+ * two-argument call keeps its old meaning for a scope of []. Passing a non-empty `modelPath`
+ * WITHOUT a `topModel` is a test-only convenience (it scopes the structure rows while treating the
+ * same model as the document root for params/settings); real callers pass all three.
  *
  * Row: {
  *   id,           // stable + unique: 'group:structure' | 'state:Well' | 'edge:Well>Sick'
@@ -41,7 +59,7 @@ export function nodePathToCheckPath(path) {
  *   checkPaths,   // string[] this row owns findings for; [] when it owns none
  * }
  */
-export function buildOutline(model, modelPath = []) {
+export function buildOutline(model, modelPath = [], topModel = model) {
   const rows = [];
   const prefix = scopePrefix(modelPath);
 
@@ -153,9 +171,15 @@ export function buildOutline(model, modelPath = []) {
   }
 
   // ===== Submodels group (if any) =====
-  if (model.models && Object.keys(model.models).length > 0) {
+  // The TOP-LEVEL models: registry, whatever scope the structure rows above are showing — spec §3:
+  // "one row per entry in the top-level models: registry ... so the outline is a map of the whole
+  // document, not just the visible scope". Unprefixed check paths for the same reason, and the DOM
+  // layer's click handler drills to `[modelName]` (a top-level scope) to match. A sub-model's own
+  // nested models: registry is therefore not listed while drilled into it — v1 narrowing, reachable
+  // through the canvas (double-click a stadium node) and the breadcrumb.
+  if (topModel.models && Object.keys(topModel.models).length > 0) {
     addGroup('group:submodels', 'Sub-models');
-    for (const [modelName] of Object.entries(model.models)) {
+    for (const [modelName] of Object.entries(topModel.models)) {
       addRow({
         id: `submodel:${modelName}`,
         kind: 'submodel',
@@ -164,14 +188,14 @@ export function buildOutline(model, modelPath = []) {
         depth: 1,
         parentId: 'group:submodels',
         sel: null, // sub-models not directly selectable from outline
-        checkPaths: [`${prefix}models.${modelName}`],
+        checkPaths: [`models.${modelName}`],
       });
     }
   }
 
-  // ===== Parameters group =====
+  // ===== Parameters group (always the top-level model's — spec §3, "Scope") =====
   addGroup('group:parameters', 'Parameters');
-  for (const [paramName] of model.params) {
+  for (const [paramName] of topModel.params) {
     addRow({
       id: `param:${paramName}`,
       kind: 'param',
@@ -180,12 +204,12 @@ export function buildOutline(model, modelPath = []) {
       depth: 1,
       parentId: 'group:parameters',
       sel: null, // params not directly selectable from outline
-      checkPaths: [`${prefix}params.${paramName}`],
+      checkPaths: [`params.${paramName}`],
     });
   }
 
-  // ===== Settings group =====
-  addGroup('group:settings', 'Settings', [`${prefix}settings`]);
+  // ===== Settings group (always the top-level model's, same rule as Parameters) =====
+  addGroup('group:settings', 'Settings', ['settings']);
 
   return rows;
 }

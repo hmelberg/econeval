@@ -78,6 +78,116 @@ test('modelPath scopes both the selection and the check paths', () => {
   assert.ok(well.checkPaths.every((p) => p.startsWith('models.post.')));
 });
 
+// --- scoped structure + top-level params/settings/sub-models (final-review Finding 1) ---
+//
+// The three-argument form is what lets ONE outline mix a sub-model's structure with the document
+// root's parameters/settings/sub-model registry, which is exactly what spec §3's "Scope" paragraph
+// requires (STRUCTURE follows the canvas scope; PARAMETERS and SETTINGS stay top-level in v1).
+
+const WITH_SUB = () => parseModel(`
+econeval: 1
+type: markov
+name: m
+settings: {cycles: 3}
+params:
+  c_well: {value: 100}
+states:
+  well: {cost: c_well, utility: 0.8}
+  dead: {cost: 0, utility: 0}
+transitions:
+  well: {well: rest, dead: 0.1}
+  dead: {dead: 1}
+models:
+  post:
+    type: markov
+    settings: {cycles: 2}
+    params:
+      c_sub: {value: 5}
+    states:
+      healthy: {cost: 0, utility: 1}
+      gone: {cost: 0, utility: 0}
+    transitions:
+      healthy: {healthy: rest, gone: 0.05}
+      gone: {gone: 1}
+`);
+
+test('scoped build: structure comes from the sub-model, params/settings/sub-models from the top', () => {
+  const top = WITH_SUB();
+  const rows = buildOutline(top.models.post, ['post'], top);
+
+  // Structure: the SUB-MODEL's states, scoped for both selection and check paths.
+  assert.ok(byId(rows, 'state:healthy'), 'the sub-model\'s own states are the structure rows');
+  assert.equal(byId(rows, 'state:well'), undefined, 'the top-level states are NOT listed while scoped in');
+  assert.deepEqual(byId(rows, 'state:healthy').sel, { kind: 'state', id: 'healthy', modelPath: ['post'] });
+  assert.deepEqual(byId(rows, 'state:healthy').checkPaths, [
+    'models.post.states.healthy', 'models.post.transitions.healthy',
+  ]);
+  assert.deepEqual(byId(rows, 'edge:healthy>gone').sel, {
+    kind: 'edge', id: { from: 'healthy', to: 'gone' }, modelPath: ['post'],
+  });
+
+  // Parameters: the TOP-LEVEL model's, unprefixed — the sub-model's own params are YAML-only in v1.
+  assert.ok(byId(rows, 'param:c_well'), 'top-level params stay listed while scoped in');
+  assert.equal(byId(rows, 'param:c_sub'), undefined, 'a sub-model\'s own params are not listed');
+  assert.deepEqual(byId(rows, 'param:c_well').checkPaths, ['params.c_well']);
+
+  // Settings + sub-model registry: top-level and unprefixed too.
+  assert.deepEqual(byId(rows, 'group:settings').checkPaths, ['settings']);
+  assert.deepEqual(byId(rows, 'submodel:post').checkPaths, ['models.post']);
+});
+
+test('scoped build: rowForSelection matches a selection made inside the sub-model', () => {
+  const top = WITH_SUB();
+  const rows = buildOutline(top.models.post, ['post'], top);
+
+  // The shape scoped-store.js's select() stamps for a canvas click inside the sub-model.
+  assert.equal(rowForSelection(rows, { kind: 'state', id: 'healthy', modelPath: ['post'] }).id, 'state:healthy');
+  assert.equal(
+    rowForSelection(rows, { kind: 'edge', id: { from: 'healthy', to: 'gone' }, modelPath: ['post'] }).id,
+    'edge:healthy>gone',
+  );
+  // A top-level selection does NOT match a scoped row (and vice versa) — the guard that made the
+  // unscoped outline reject every sub-model click before this fix.
+  assert.equal(rowForSelection(rows, { kind: 'state', id: 'healthy', modelPath: [] }), null);
+  // Params are top-level in both, so a param selection still resolves while scoped in.
+  assert.equal(rowForSelection(rows, { kind: 'param', id: 'c_well', modelPath: [] }).id, 'param:c_well');
+});
+
+test('scoped build: a finding inside the sub-model lands on its structure row, not the sub-model row', () => {
+  const top = WITH_SUB();
+  const rows = buildOutline(top.models.post, ['post'], top);
+  const { byRow, counts, residual } = attachFindings(rows, [
+    { level: 'error', code: 'E_EXPR', path: 'models.post.transitions.healthy.gone', message: 'bad p' },
+    { level: 'error', code: 'E_SUB', path: 'models.post', message: 'sub-model itself' },
+  ]);
+  assert.deepEqual(byRow.get('edge:healthy>gone').map((f) => f.code), ['E_EXPR']);
+  assert.deepEqual(byRow.get('submodel:post').map((f) => f.code), ['E_SUB']);
+  assert.deepEqual(counts.get('group:structure'), { errors: 1, warnings: 0 });
+  assert.deepEqual(residual, []);
+});
+
+test('scoped build: a tree sub-model scopes its node paths too', () => {
+  const top = parseModel(`
+econeval: 1
+type: tree
+name: t
+tree:
+  Root:
+    A: {model: sub}
+models:
+  sub:
+    type: tree
+    tree:
+      SubRoot:
+        Win: {p: rest, utility: 10}
+`);
+  const rows = buildOutline(top.models.sub, ['sub'], top);
+  const win = byId(rows, 'node:SubRoot/Win');
+  assert.deepEqual(win.sel, { kind: 'node', id: ['SubRoot', 'Win'], modelPath: ['sub'] });
+  assert.deepEqual(win.checkPaths, ['models.sub.tree.Win']);
+  assert.equal(rowForSelection(rows, { kind: 'node', id: ['SubRoot', 'Win'], modelPath: ['sub'] }).id, 'node:SubRoot/Win');
+});
+
 test('filter keeps matches and their ancestors, drops the rest', () => {
   const rows = buildOutline(MARKOV());
   const out = filterRows(rows, 'dead');

@@ -177,6 +177,9 @@ single scrolling outline: a filter input pinned at the top, then collapsible gro
 - **SUB-MODELS** — one row per entry in the top-level `models:` registry, expandable to that
   sub-model's own structure. Clicking a sub-model row drills the canvas into it (`openScope`), so
   the outline is a map of the whole document, not just the visible scope.
+  *v1 narrowing (accepted at final review):* a sub-model row **navigates rather than expands** — it
+  has no child rows of its own. Its structure is reached by drilling in, at which point STRUCTURE
+  shows it (see "Scope", below).
 - **PARAMETERS** — one row per parameter; expanding shows value / low / high / dist / source as
   vertical label-above-input rows. This replaces the 7-column table outright.
 - **SETTINGS** — always the top-level model's settings, as today's Settings tab renders them.

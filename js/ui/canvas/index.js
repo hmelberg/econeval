@@ -54,7 +54,19 @@ function clamp(v, lo, hi) {
 //     fires moments later. Called at the top of every node/edge/background pointerdown handler
 //     (the start of a pointer gesture) and at the top of the Delete/Backspace key handler and the
 //     rename-commit handler (the two op-producing gestures that don't begin with a pointerdown).
-export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
+//   onScopeChange: (modelPath) => void        — optional, defaults to a no-op. Fired with a COPY of
+//     currentModelPath every time this module changes it: openScope (the inspector's own row click,
+//     and results.js's validation click-through), a double-click drill-in (enterSubModel), a
+//     breadcrumb pop, and render()'s own bail-to-main correction when the path stops resolving.
+//     Final-review Finding 1: currentModelPath is this module's private state, and NOTHING outside
+//     it could learn that it had changed — so the inspector's outline silently kept showing the
+//     top-level model's structure while the canvas was drilled into a sub-model, leaving no route
+//     to edit a sub-model's contents except the YAML pane. This callback is the notification that
+//     was missing; app.js wires it to inspector.setScope. Deliberately push-only and one-way: the
+//     canvas owns the scope and announces it, while the reverse direction (something ASKING the
+//     canvas to change scope) stays the pre-existing openScope call, which no-ops when the path is
+//     already current and so cannot loop back through this callback.
+export function createCanvas(svgEl, store, { layoutFor, flush = () => {}, onScopeChange = () => {} }) {
   const breadcrumbEl = typeof document !== 'undefined' ? document.getElementById('breadcrumb') : null;
   const toastEl = typeof document !== 'undefined' ? document.getElementById('canvas-toast') : null;
   const toolbarEl = typeof document !== 'undefined' ? document.getElementById('canvas-toolbar') : null;
@@ -111,12 +123,21 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
   // just settable to an arbitrary depth in one call instead of one level at a time. app.js's
   // selectOnCanvas calls this BEFORE store.select(sel), so the halo-matching sameModelPath check
   // above sees the right scope by the time the resulting store notification re-renders.
+  // Announces the CURRENT scope to whoever asked to be told (app.js -> inspector.setScope). Always
+  // a copy: currentModelPath is a live array this module keeps mutating in place (and hands out on
+  // the public surface), so passing it directly would let a listener observe later mutations it was
+  // never notified about.
+  function notifyScopeChange() {
+    onScopeChange([...currentModelPath]);
+  }
+
   function openScope(modelPath) {
     const path = modelPath ?? [];
     if (sameModelPath(currentModelPath, path)) return;
     currentModelPath.length = 0;
     currentModelPath.push(...path);
     render();
+    notifyScopeChange();
   }
 
   // -------- toast strip (transient op-error messages; "errors surfaced, never swallowed") --------
@@ -164,6 +185,7 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
         if (currentModelPath.length === i) return; // already at this depth
         currentModelPath.length = i;
         render();
+        notifyScopeChange();
       };
       seg.addEventListener('click', popTo);
       seg.addEventListener('keydown', (e) => {
@@ -365,6 +387,7 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
   function enterSubModel(target) {
     currentModelPath.push(target.node.model);
     render();
+    notifyScopeChange();
   }
 
   // The selection filtered to the scope the canvas is CURRENTLY showing (controller ruling — a
@@ -397,9 +420,11 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
       return;
     }
     let model = resolveActiveModel();
+    let scopeReset = false;
     if (!model) {
       currentModelPath.length = 0; // the path no longer resolves (e.g. edited away) — bail to main
       model = top;
+      scopeReset = true;
     }
     renderBreadcrumb();
     cancelRename(); // buildSvg rebuilds the whole svg subtree; tear down any open rename first —
@@ -410,6 +435,11 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
       selection: scopedSelection(),
       handlers, // gestures.handlers + Task 8's onContextMenu — see the createGestures call below
     });
+    // Notified LAST, after this render has fully reconciled: the scope was corrected above (the
+    // drilled-into sub-model was renamed or deleted out from under us, typically by a YAML-pane
+    // edit or an undo), and the outline has to follow the same correction or it would keep offering
+    // rows for a model that no longer exists.
+    if (scopeReset) notifyScopeChange();
   }
 
   // -------- pan/zoom to cursor, fit to view, tidy layout (Task 6) --------
@@ -463,12 +493,23 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
 
   // Fit to view (⌘0 / the toolbar button): reframe the viewBox around every node's CURRENT
   // position in the scope on screen (fitBox's own 60px pad; an empty model falls back to the base
-  // viewBox) and reset zoom to match, so the wheel/pinch zoom clamp (ZOOM_MIN/ZOOM_MAX, expressed
-  // relative to BASE_W) stays meaningful immediately afterwards.
+  // viewBox) and re-derive `zoom` from the resulting width.
+  //
+  // Review fix (Finding 3, final review): that derived value MUST be clamped. The old comment here
+  // claimed writing BASE_W/box.w kept ZOOM_MIN/ZOOM_MAX "meaningful immediately afterwards" — it
+  // did the opposite. A model wider than BASE_W/ZOOM_MIN (~1800 units) fits at zoom < 0.5, and the
+  // very next zoomAt() computes `newZoom = clamp(zoom * factor, ...)` — which snaps straight up to
+  // 0.5 — while `scale = zoom / newZoom` divides by that clamped value using the UNCLAMPED `zoom`.
+  // One ⌘+ or wheel notch then jumped the viewport by 2x or more instead of the intended 1.1x
+  // (symmetrically, a tiny model fitting above ZOOM_MAX jumped the other way). Clamping here keeps
+  // `zoom` and the view in the same units zoomAt's own arithmetic assumes, so the first zoom step
+  // after a Fit is an ordinary 1.1x of what is actually on screen. The viewBox itself still fits the
+  // content exactly — only the scalar `zoom` is clamped, and zoomAt scales the CURRENT view.w/h
+  // (never BASE_W/BASE_H), so a clamped `zoom` costs the fit nothing.
   function fitToView() {
     const box = fitBox(Object.values(layoutFor(resolveActiveModel() ?? {})), 60);
     view.x = box.x; view.y = box.y; view.w = box.w; view.h = box.h;
-    zoom = BASE_W / box.w;
+    zoom = clamp(BASE_W / box.w, ZOOM_MIN, ZOOM_MAX);
     applyViewBox();
   }
 

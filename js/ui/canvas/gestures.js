@@ -215,7 +215,16 @@ export function createGestures(svgEl, opts) {
   function resolveDrop(cur, g, e) {
     const source = g.target;
     const over = pickNode(cur, getNodeIndex());
-    const target = over && (over !== source || g.leftSource) ? over : null;
+    // sameNodeId, NOT object identity (review fix, Finding 5, final review): `over` comes from the
+    // CURRENT nodeIndex, which index.js's render() rebuilds wholesale — and render() is on
+    // store.subscribe. Any store notification landing mid-drag (an autosave-adjacent commit, a
+    // debounced YAML edit flushing, an undo) replaces every entry object, so the source's own fresh
+    // entry is `!== source` even though it is the same node. The drop then read as "over a
+    // DIFFERENT node" and connected the source to itself: moveNode(path, path) throws and toasts in
+    // a tree, and markov grew a spurious self-loop. Comparing by identity (kind + key/path) is what
+    // this module already does everywhere else it has to survive a re-render (onNodePointerDown's
+    // `getNodeIndex().find((n) => sameNodeId(n, id))`, its double-click test).
+    const target = over && (!sameNodeId(over, source) || g.leftSource) ? over : null;
     const connecting = !e.altKey && (spaceHeld || target !== null);
     return { target, connecting };
   }
@@ -304,8 +313,11 @@ export function createGestures(svgEl, opts) {
       // no-op. Without this guard, moveNode(path, path) would throw its own "cannot be dropped
       // onto itself" and runOp would toast it — a plain error for a gesture the user most likely
       // just aborted mid-drag, not a genuine failure. ops.moveNode's own self-drop guard is left
-      // exactly as it is (Task 8's context menu may reach it by other routes).
-      if (target === source) return;
+      // exactly as it is (Task 8's context menu may reach it by other routes). sameNodeId, not
+      // object identity, for the same reason resolveDrop above uses it: a mid-drag re-render
+      // replaces every nodeIndex entry, and `===` would let this guard fall through to
+      // moveNode(path, path) — the exact toast it exists to prevent (Finding 5, final review).
+      if (sameNodeId(target, source)) return;
       runOp(store, (m) => moveNode(m, source.path, target.path));
     } else {
       const at = e.metaKey ? [Math.round(cur.x), Math.round(cur.y)] : snapToGrid([cur.x, cur.y]);

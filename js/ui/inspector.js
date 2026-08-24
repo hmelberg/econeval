@@ -4,7 +4,7 @@
 // the terminal "Settings" group, whose fields are its own group's "content" and show/hide with its
 // own collapse toggle instead (see the "Expansion" section below).
 //
-// createInspector(rootEl, headEl, store, {flush, openScope}) -> {render(), revealSelection()}
+// createInspector(rootEl, headEl, store, {flush, openScope}) -> {render(), revealSelection(), setScope()}
 //   rootEl:     #inspector-body — the filter bar + row list go here, rebuilt on every structural
 //               render().
 //   headEl:     #inspector-tabs, the pane's .panel-head. panels.js already writes its own
@@ -19,12 +19,14 @@
 //               dependency scoped-store.js exists to remove), so app.js injects this instead.
 //               Defaults to a no-op (safe for tests / a caller that doesn't need it).
 //
-// Row source: js/ui/outline/build.js's buildOutline(model) — pure, DOM-free, fully tested. This
-// module is only the view on top of it: buildOutline is always called on the TOP-LEVEL model
-// (modelPath: [] for every row), matching every existing outline-build.test.js fixture. A row's
-// own `sel.modelPath` is therefore always [] today; scopedStoreFor(store, row.sel.modelPath) below
-// is written generally (not hardcoded to `store`) so a future deeper-nesting outline would not
-// need this module's edit logic to change, but it is a no-op in v1.
+// Row source: js/ui/outline/build.js's buildOutline(scopedModel, scope, topModel) — pure, DOM-free,
+// fully tested. This module is only the view on top of it. `scope` is the canvas's own
+// currentModelPath, PUSHED here by app.js through setScope() (see "Scope", below): STRUCTURE rows
+// are built from the sub-model the canvas is currently drilled into and carry that scope on their
+// `sel.modelPath`, so a canvas click inside a sub-model (whose selection scoped-store.js stamps
+// with the same chain) resolves to a row; PARAMETERS, SETTINGS and the SUB-MODELS registry are
+// always built from the TOP-LEVEL model. Each structure row then edits through
+// scopedStoreFor(store, row.sel.modelPath), which is the same chain again.
 //
 // Selection: STRUCTURE rows (state/edge/node) are canvas entities — a click calls
 // openScope(row.sel.modelPath) then store.select(row.sel), the same ordering results.js's
@@ -51,7 +53,15 @@
 //
 // Scope: STRUCTURE rows edit through scopedStoreFor(store, row.sel.modelPath); PARAMETERS and
 // SETTINGS always edit the top-level store (row.sel.modelPath is [] there always, by definition —
-// build.js never gives params/settings a non-empty modelPath).
+// build.js never gives params/settings a non-empty modelPath). The scope itself is owned by
+// canvas/index.js (its currentModelPath) and PUSHED here via setScope(), wired in app.js as
+// createCanvas's `onScopeChange` callback — this module keeps no canvas reference of its own (that
+// import direction is exactly what scoped-store.js exists to remove) and never derives the scope
+// from the selection either: the canvas can be drilled into a sub-model with nothing selected, and
+// a stale cross-scope selection must not silently re-point the outline. setScope() is a plain
+// "canvas scope changed, rebuild" notification; the pull direction (a row click drilling the canvas
+// INTO a scope) stays the pre-existing injected openScope callback, so the two directions remain
+// one-way each and cannot loop (openScope no-ops when the path is already current).
 //
 // Render discipline: a full render() rebuilds the row list, which would steal focus/cursor out
 // from under a field the user is actively editing. shouldSkipRender() skips the rebuild whenever
@@ -69,10 +79,22 @@
 // The filter input and the "Only findings" toggle are LOCAL UI state, not store state — typing in
 // the filter box never touches the store, so it never goes through shouldSkipRender at all; it
 // calls render() directly on every keystroke. Because render() rebuilds rootEl wholesale
-// (including the filter bar itself), render() explicitly captures the filter input's focus +
-// cursor position + rootEl.scrollTop before replaceChildren() and restores all three after —
-// otherwise every filter keystroke would visibly steal its own input's focus and jump the scroll
-// position. The collapsed-group Set and filter string are also the two pieces of outline state
+// (including the filter bar itself), render() captures WHICH CONTROL had focus (by its `id`), its
+// text cursor position if it has one, and rootEl.scrollTop before replaceChildren(), and restores
+// all three after. Review fix (Finding 2, final review): that restore used to be hardcoded to
+// `#otl-filter`, so every OTHER control in the panel dropped focus to <body> the moment it was
+// activated — a row button (its click selects -> store notification -> full rebuild, not skipped
+// because a <button> is not a typing target), a group's collapse toggle, the Only-findings toggle —
+// leaving keyboard-driven use of the outline at one action per Tab-from-the-top-of-the-document.
+// The deleted tab strip handled this explicitly (`if (hadTabFocus) focusTab(activeTab)`), so it was
+// a capability dropped in the rewrite, in what is now the primary sidebar. The restore is keyed on
+// the element's `id` rather than a node reference because the node itself is destroyed by
+// replaceChildren(); every control that SURVIVES a rebuild therefore carries a stable id (rows:
+// `otl-<row.id>`, set in outlineRow; the filter: `otl-filter`; the toggles/add-buttons: their own
+// literal ids below). A control that legitimately ceases to exist (the "−" button of a kv row the
+// user just removed) has nothing to restore to, and is left alone. pendingFocusEl still wins over
+// this when set — a just-added row's input is an explicit focus intent, not a restoration.
+// The collapsed-group Set and filter string are also the two pieces of outline state
 // persisted through panels.js's saveLayout (read-merge-write, same pattern panels.js's own
 // persist() uses) — replacing the old three-tab design's now-dead `tab` field. `onlyFindings`
 // itself is NOT persisted (a session-only view preference).
@@ -197,6 +219,12 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
   let lastSelKey = null;
   let renderedSelection = { kind: null, id: null }; // the selection the CURRENTLY DISPLAYED fields were built from, set at the top of every render()
 
+  // The canvas scope the STRUCTURE group currently shows — [] (the top-level model) until app.js
+  // pushes a change through setScope(). Deliberately NOT persisted through saveLayout: the canvas's
+  // own currentModelPath resets to [] on every boot, and an outline restoring a scope the canvas
+  // isn't in would be a fresh source of exactly the desynchronisation this fix removes.
+  let scopePath = [];
+
   const initialOutline = loadLayout().outline ?? { collapsed: [], filter: '' };
   let collapsedGroups = new Set(initialOutline.collapsed ?? []);
   let filterQuery = initialOutline.filter ?? '';
@@ -213,7 +241,7 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
   // dots/counts/residual list, not just a tab badge.
   let latestFindings = [];
   let findingsTimer = null;
-  // allRows: the FULL, unfiltered row list from the last render() (buildOutline(topModel) with no
+  // allRows: the FULL, unfiltered row list from the last render() (outlineRows() with no
   // filterRows/onlyFindings/collapseFilter applied) — paintFindings() below recomputes
   // attachFindings(allRows, latestFindings) against THIS cached list rather than calling
   // buildOutline() fresh, so it always stays paired with rowElements/fieldSlots (also captured at
@@ -523,7 +551,11 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
     return row;
   }
 
-  function keyValueEditor({ container, targetStore, obj, pathFor, setOp, addLabel, pendingRef, isExpr, subhead }) {
+  // `addId` (Finding 2, final review): a stable id on the "+ add …" button so render()'s focus
+  // restoration can find it again after the rebuild its own click triggers. At most one row is
+  // expanded at a time, so the two ids in use ('otl-add-payoff', 'otl-add-with') are unique within
+  // the panel even when a node row shows both editors at once.
+  function keyValueEditor({ container, targetStore, obj, pathFor, setOp, addLabel, addId, pendingRef, isExpr, subhead }) {
     const wrap = h('div', { class: 'insp-kv' });
     if (subhead) wrap.appendChild(h('div', { class: 'insp-subhead' }, subhead));
     const list = h('div', { class: 'insp-kv-list' });
@@ -536,7 +568,7 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
       pendingFocusEl = row.querySelector('.insp-kv-key');
     }
     wrap.appendChild(list);
-    const addBtn = h('button', { type: 'button', class: 'insp-add-row' }, addLabel);
+    const addBtn = h('button', { type: 'button', id: addId, class: 'insp-add-row' }, addLabel);
     addBtn.addEventListener('click', () => {
       pendingRef.count += 1;
       render();
@@ -564,7 +596,7 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
       container, targetStore, obj: st.payoffs,
       pathFor: (k) => `${prefix}states.${name}.${k}`,
       setOp: (m, k, v) => ops.setStatePayoff(m, name, k, v),
-      addLabel: '+ add payoff', pendingRef: pendingPayoffRef, isExpr: true, subhead: 'Payoffs',
+      addLabel: '+ add payoff', addId: 'otl-add-payoff', pendingRef: pendingPayoffRef, isExpr: true, subhead: 'Payoffs',
     });
   }
 
@@ -626,7 +658,7 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
       container, targetStore, obj: node.payoffs,
       pathFor: (k) => `${checkPath}.${k}`,
       setOp: (m, k, v) => ops.setNodePayoff(m, path, k, v),
-      addLabel: '+ add payoff', pendingRef: pendingPayoffRef, isExpr: true, subhead: 'Payoffs',
+      addLabel: '+ add payoff', addId: 'otl-add-payoff', pendingRef: pendingPayoffRef, isExpr: true, subhead: 'Payoffs',
     });
 
     if (!isRootChild) {
@@ -661,7 +693,7 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
       container, targetStore, obj: node.with ?? {},
       pathFor: (k) => `${checkPath}.with.${k}`,
       setOp: (m, k, v) => ops.setWith(m, path, k, v),
-      addLabel: '+ add with', pendingRef: pendingWithRef, isExpr: true, subhead: 'With (sub-model overrides)',
+      addLabel: '+ add with', addId: 'otl-add-with', pendingRef: pendingWithRef, isExpr: true, subhead: 'With (sub-model overrides)',
     });
   }
 
@@ -701,7 +733,7 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
   }
 
   function buildAddParamButton() {
-    const btn = h('button', { type: 'button', class: 'insp-add-row otl-add-param' }, '+ Add parameter');
+    const btn = h('button', { type: 'button', id: 'otl-add-param', class: 'insp-add-row otl-add-param' }, '+ Add parameter');
     btn.addEventListener('click', () => {
       const before = new Set(store.get().model.params.keys());
       const e = commitOp(store, (m) => ops.addParam(m));
@@ -980,6 +1012,24 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
     saveLayout({ ...blob, outline: { collapsed: [...collapsedGroups], filter: filterQuery } });
   }
 
+  // The one place the row list is built (render() and revealSelection() must never disagree about
+  // what rows exist, or a reveal would scroll to a row the render didn't produce). Resolves the
+  // canvas scope to its sub-model through the SAME scopedStoreFor chain every edit goes through,
+  // and hands buildOutline the (scoped model, scope, top model) triple its contract wants: scoped
+  // STRUCTURE, top-level PARAMETERS/SETTINGS/SUB-MODELS (spec §3, "Scope").
+  //
+  // A scope that no longer resolves (the sub-model was renamed or deleted out from under a drilled-
+  // in canvas, e.g. by a YAML-pane edit or an undo) falls back to the top level rather than
+  // rendering an empty STRUCTURE group. canvas/index.js's own render() makes the identical
+  // correction to currentModelPath and then notifies us through setScope, so this only covers the
+  // instant between the model changing and that notification arriving — but the two agree on the
+  // answer, so there is no flicker between an empty outline and a top-level one.
+  function outlineRows(topModel) {
+    const scoped = scopePath.length === 0 ? topModel : scopedStoreFor(store, scopePath).get().model;
+    if (!scoped) return buildOutline(topModel, [], topModel);
+    return buildOutline(scoped, scopePath, topModel);
+  }
+
   function toggleCollapsed(id) {
     if (collapsedGroups.has(id)) collapsedGroups.delete(id);
     else collapsedGroups.add(id);
@@ -999,8 +1049,8 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
       render(); // local UI state, not a store change -- bypasses shouldSkipRender entirely, on purpose
     });
     const onlyBtn = h('button', {
-      type: 'button', class: 'otl-only-findings', 'aria-pressed': String(onlyFindings),
-      title: 'Show only rows with findings',
+      type: 'button', id: 'otl-only-findings', class: 'otl-only-findings',
+      'aria-pressed': String(onlyFindings), title: 'Show only rows with findings',
     }, 'Only findings');
     onlyBtn.addEventListener('click', () => {
       onlyFindings = !onlyFindings;
@@ -1022,15 +1072,15 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
   // Important) — set once here, statically, since it never changes — so the `aria-label`
   // paintFindings() gives it whenever a finding is present participates in the row BUTTON's own
   // accessible-name computation; a bare `title` on a plain non-focusable `<span>` does not.
-  function outlineRow(row, { expanded, hasChildren, collapsed }) {
+  function outlineRow(row, { expanded, collapsible, collapsed }) {
     const btn = h('button', {
       type: 'button', class: 'otl-row', id: `otl-${row.id}`,
       'data-kind': row.kind, style: `--depth:${row.depth}`,
-      'aria-expanded': hasChildren ? String(!collapsed) : undefined,
+      'aria-expanded': collapsible ? String(!collapsed) : undefined,
       'aria-current': expanded ? 'true' : undefined,
     });
     btn.append(
-      h('span', { class: 'otl-twisty' }, hasChildren ? (collapsed ? '▸' : '▾') : ''),
+      h('span', { class: 'otl-twisty' }, collapsible ? (collapsed ? '▸' : '▾') : ''),
       h('span', { class: 'otl-label' }, row.label),
       h('span', { class: 'otl-detail' }, row.detail),
       row.kind === 'group'
@@ -1050,12 +1100,22 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
 
   function render() {
     // Captured BEFORE replaceChildren() destroys whatever currently has focus — restored after,
-    // below. See the module doc's render-discipline section for why this exists.
+    // below. See the module doc's render-discipline section for why this exists, and why it is
+    // keyed on the focused element's `id` rather than the element itself (which does not survive).
     const scrollTop = rootEl.scrollTop;
     const active = document.activeElement;
-    const preserveFilterFocus = !!(active && active.id === 'otl-filter' && rootEl.contains(active));
-    const filterSelStart = preserveFilterFocus ? active.selectionStart : null;
-    const filterSelEnd = preserveFilterFocus ? active.selectionEnd : null;
+    const focusedId = active && active.id && rootEl.contains(active) ? active.id : null;
+    // selectionStart/End exist on text-ish inputs only, and THROW on some input types (number,
+    // email). A control with no text cursor (a button) simply reports undefined — nothing to
+    // restore, which the null check on the way back out handles.
+    let selStart = null;
+    let selEnd = null;
+    if (focusedId) {
+      try {
+        selStart = active.selectionStart;
+        selEnd = active.selectionEnd;
+      } catch { /* input type without a text cursor */ }
+    }
 
     const state = store.get();
     renderedSelection = state.selection ?? { kind: null, id: null };
@@ -1085,7 +1145,7 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
     const list = h('div', { class: 'otl-list' });
     rootEl.appendChild(list);
 
-    allRows = buildOutline(topModel);
+    allRows = outlineRows(topModel);
     const filtered = filterRows(allRows, filterQuery);
     // onlyFindings composition (per the controller's "things the brief cannot know" note): applied
     // AFTER filterRows, never before — a row survives onlyFindings when IT ITSELF has a finding OR
@@ -1127,13 +1187,21 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
       // Review fix (Important, Task 10 review): only GROUP headers are individually collapsible
       // (toggleCollapsed is only ever called for row.kind === 'group', below) — a markov state
       // with edges, or a non-leaf tree node, has children in the `parentId` sense but clicking it
-      // always selects, never collapses. Gating hasChildren to group rows keeps the twisty/
-      // aria-expanded truthful: no permanent, non-functional "expanded" affordance on the
-      // majority of structural rows.
-      const hasChildren = row.kind === 'group' && allRows.some((r) => r.parentId === row.id);
+      // always selects, never collapses. Gating this to group rows keeps the twisty/aria-expanded
+      // truthful: no permanent, non-functional "expanded" affordance on the majority of structural
+      // rows.
+      //
+      // Review fix (Finding 7, final review): `group:settings` is the one group with no child ROWS
+      // at all (build.js gives it none — its content is FIELDS, shown by `showFields` below on the
+      // very same collapsed flag), so a plain "has child rows" test called it non-collapsible and
+      // it got neither a twisty nor aria-expanded — while clicking it toggled its content anyway.
+      // Special-cased so its expanded state is both visible and programmatically exposed, matching
+      // what the click actually does.
+      const collapsible = row.kind === 'group'
+        && (row.id === 'group:settings' || allRows.some((r) => r.parentId === row.id));
       const collapsed = collapsedGroups.has(row.id);
       const expanded = row.kind !== 'group' && row.id === expandedId;
-      const btn = outlineRow(row, { expanded, hasChildren, collapsed });
+      const btn = outlineRow(row, { expanded, collapsible, collapsed });
       list.appendChild(btn);
       rowElements.set(row.id, btn);
 
@@ -1164,11 +1232,17 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
     modelFindingsWrapEl = findingsWrap;
 
     rootEl.scrollTop = scrollTop;
-    if (preserveFilterFocus) {
-      const el = rootEl.querySelector('#otl-filter');
-      if (el) {
+    if (focusedId) {
+      // getElementById, not querySelector: row ids embed ':', '>' and '/' (state:well,
+      // edge:well>dead, node:Root/A), none of which are legal in an unescaped CSS id selector.
+      // The rootEl.contains() re-check keeps this honest if an id ever collides with one outside
+      // the panel.
+      const el = document.getElementById(focusedId);
+      if (el && rootEl.contains(el)) {
         el.focus();
-        if (filterSelStart != null) el.setSelectionRange(filterSelStart, filterSelEnd);
+        if (selStart != null && typeof el.setSelectionRange === 'function') {
+          try { el.setSelectionRange(selStart, selEnd); } catch { /* not a text-cursor input */ }
+        }
       }
     }
 
@@ -1186,24 +1260,45 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
     }
   }
 
-  // Expands the selected row (uncollapsing any collapsed ancestor group above it) and scrolls it
-  // into view. Exposed for results.js's Validation-tab click-through (via app.js's
-  // selectOnCanvas): canvas.openScope(...) -> store.select(sel) already happened by the time this
-  // is called, so the row list already reflects the new selection (unless shouldSkipRender
-  // happened to skip that notification) — this call forces a render() unconditionally to make
-  // sure, then scrolls.
+  // Expands the selected row (uncollapsing any collapsed ancestor group above it, and clearing the
+  // text filter) and scrolls it into view. Exposed for results.js's Validation-tab click-through
+  // (via app.js's selectOnCanvas): canvas.openScope(...) -> store.select(sel) already happened by
+  // the time this is called — openScope having pushed the new scope through setScope() below, so
+  // outlineRows() builds the sub-model's own rows and rowForSelection can actually match a
+  // sub-model finding's selection — and this call forces a render() unconditionally, then scrolls.
+  //
+  // Review fix (Finding 4, final review): filterQuery PERSISTS across reloads, so a filter left
+  // over from a previous session (or typed minutes ago and forgotten) could exclude the very row
+  // being revealed, and the reveal would land on nothing at all — rowElements.get(row.id) simply
+  // returns undefined. Uncollapsing ancestor groups while leaving a text filter in place was two
+  // inconsistent notions of "reveal"; both obstructions are now cleared. The clear goes through
+  // `filterQuery` + persistOutlineState() + render(), and render() rebuilds the filter bar from
+  // `filterQuery`, so the input visibly empties too — the UI never disagrees with the state.
   function revealSelection() {
     const state = store.get();
     if (!state.model) return;
-    const allRows = buildOutline(state.model);
-    const row = rowForSelection(allRows, state.selection);
+    const rows = outlineRows(state.model);
+    const row = rowForSelection(rows, state.selection);
     if (!row) return;
-    const toUncollapse = ancestorIds(allRows, row).filter((id) => collapsedGroups.has(id));
+    const toUncollapse = ancestorIds(rows, row).filter((id) => collapsedGroups.has(id));
     for (const id of toUncollapse) collapsedGroups.delete(id);
-    if (toUncollapse.length > 0) persistOutlineState();
+    const hadFilter = filterQuery !== '';
+    if (hadFilter) filterQuery = '';
+    if (toUncollapse.length > 0 || hadFilter) persistOutlineState();
     render();
     const el = rowElements.get(row.id);
     if (el) el.scrollIntoView({ block: 'nearest' });
+  }
+
+  // The canvas scope changed (app.js wires this to createCanvas's onScopeChange — see the module
+  // doc's "Scope" section). Rebuilds the outline so STRUCTURE shows the scope now on screen. A
+  // no-op when the scope is unchanged, which is what keeps the openScope -> onScopeChange ->
+  // setScope path from re-rendering on every row click that doesn't actually change scope.
+  function setScope(modelPath) {
+    const next = [...(modelPath ?? [])];
+    if (next.length === scopePath.length && next.every((n, i) => n === scopePath[i])) return;
+    scopePath = next;
+    render();
   }
 
   function onStoreChange() {
@@ -1225,5 +1320,5 @@ export function createInspector(rootEl, headEl, store, { flush = () => {}, openS
 
   render();
 
-  return { render, revealSelection };
+  return { render, revealSelection, setScope };
 }

@@ -222,15 +222,29 @@ function renderYamlPane() {
 
 const panels = initPanels();
 
+// Assigned immediately below the canvas, which needs to be able to CALL it (onScopeChange) while
+// the inspector in turn needs canvas.openScope — a two-way wiring between two constructors, which
+// this module resolves the way it resolves every other one: by owning both references itself, so
+// neither module ever imports the other. `let` + the null guard because createCanvas's own boot
+// render() runs before this is assigned (it can't fire onScopeChange then — currentModelPath starts
+// empty and only a CHANGE notifies — but a guard is cheaper than depending on that staying true).
+let inspector = null;
+
 const canvas = createCanvas(document.getElementById('canvas'), store, {
   layoutFor,
   flush: sync.flush,
+  // Final-review Finding 1: the canvas owns the scope (currentModelPath) and, until now, told
+  // nobody when it changed — so drilling into a sub-model left the outline showing the top-level
+  // model's structure, and every click inside the sub-model expanded nothing at all (its rows'
+  // sel.modelPath said [] while the selection said ['sub'], so rowForSelection never matched).
+  // Pushing the new scope into the inspector is what makes STRUCTURE follow the canvas, per spec §3.
+  onScopeChange: (modelPath) => { if (inspector) inspector.setScope(modelPath); },
 });
 
 // Task 10: the inspector drills the canvas into a row's sub-model scope on click, but inspector.js
 // holds no canvas reference of its own (importing one would rebuild exactly the backwards peer
 // dependency scoped-store.js exists to remove) — so canvas.openScope is injected here instead.
-const inspector = createInspector(document.getElementById('inspector-body'), document.getElementById('inspector-tabs'), store, {
+inspector = createInspector(document.getElementById('inspector-body'), document.getElementById('inspector-tabs'), store, {
   flush: sync.flush,
   openScope: canvas.openScope,
 });
