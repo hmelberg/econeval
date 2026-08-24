@@ -12,6 +12,11 @@ test('hitShapeFor maps every node kind to its real outline', () => {
   assert.deepEqual(hitShapeFor('terminal'), { shape: 'rect', w: 16, h: 30 });
 });
 
+test('hitShapeFor throws on unrecognized node kind', () => {
+  assert.throws(() => hitShapeFor('unknown'), /unrecognized node kind/);
+  assert.throws(() => hitShapeFor('circle'), /unrecognized node kind/);
+});
+
 test('circle hit: inside, on the rim, inside the slack, outside', () => {
   const c = hitShapeFor('state');   // r 26, slack 6
   assert.equal(isInside([100, 100], [100, 100], c), true);
@@ -32,7 +37,7 @@ test('rect hit respects width and height separately', () => {
 test('stadium hit rounds its end caps instead of squaring them', () => {
   const s = hitShapeFor('submodel');  // 120 x 32; caps are circles of r 16 at x = +-44
   assert.equal(isInside([100, 100], [100, 100], s, 0), true);
-  assert.equal(isInside([158, 100], [100, 100], s, 0), true);   // on the cap's far edge
+  assert.equal(isInside([158, 100], [100, 100], s, 0), true);   // 2px inside the cap's far edge (160)
   assert.equal(isInside([161, 100], [100, 100], s, 0), false);
   // The corner of the bounding box is OUTSIDE the pill, which a rect test would wrongly accept.
   assert.equal(isInside([159, 115], [100, 100], s, 0), false);
@@ -44,8 +49,16 @@ test('pickNode returns the topmost (last) match when shapes overlap', () => {
     { key: 'over', xy: [110, 100], hit: hitShapeFor('state') },
   ];
   assert.equal(pickNode([105, 100], index).key, 'over');
-  assert.equal(pickNode([80, 100], index).key, 'under');
+  assert.equal(pickNode([70, 100], index).key, 'under');
   assert.equal(pickNode([400, 400], index), null);
+});
+
+test('pickNode is forgiving by HIT_SLACK by default', () => {
+  // Probe BETWEEN the bare radius and radius + slack: a default of 0 would miss this, a default of
+  // HIT_SLACK finds it. Probing inside the bare radius cannot tell the two defaults apart.
+  const index = [{ key: 'only', xy: [100, 100], hit: hitShapeFor('state') }];
+  assert.equal(pickNode([129, 100], index).key, 'only');   // 29 > r 26, <= r + slack 32
+  assert.equal(pickNode([129, 100], index, 0), null);      // explicit 0 refuses it
 });
 
 test('snapToGrid rounds to the nearest 12px multiple', () => {

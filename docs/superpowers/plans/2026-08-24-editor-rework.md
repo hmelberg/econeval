@@ -573,6 +573,14 @@ test('pickNode returns the topmost (last) match when shapes overlap', () => {
   assert.equal(pickNode([400, 400], index), null);
 });
 
+test('pickNode is forgiving by HIT_SLACK by default', () => {
+  // Probe BETWEEN the bare radius and radius + slack: a default of 0 would miss this, a default of
+  // HIT_SLACK finds it. Probing inside the bare radius cannot tell the two defaults apart.
+  const index = [{ key: 'only', xy: [100, 100], hit: hitShapeFor('state') }];
+  assert.equal(pickNode([129, 100], index).key, 'only');   // 29 > r 26, <= r + slack 32
+  assert.equal(pickNode([129, 100], index, 0), null);      // explicit 0 refuses it
+});
+
 test('snapToGrid rounds to the nearest 12px multiple', () => {
   assert.equal(GRID, 12);
   assert.deepEqual(snapToGrid([0, 0]), [0, 0]);

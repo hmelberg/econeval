@@ -87,7 +87,7 @@ export function hitShapeFor(kind) {
   if (kind === 'root') return { shape: 'rect', w: 2 * ROOT_HALF, h: 2 * ROOT_HALF };
   if (kind === 'submodel') return { shape: 'stadium', w: STADIUM_W, h: STADIUM_H };
   if (kind === 'terminal') return { shape: 'rect', w: 16, h: 30 };
-  return { shape: 'circle', r: NODE_R };
+  throw new Error(`hitShapeFor: unrecognized node kind '${kind}'`);
 }
 
 // A stadium is a rect of (w - h) by h with a half-circle cap of radius h/2 at each end. Clamp the
@@ -110,7 +110,7 @@ export function isInside(point, xy, hit, slack = HIT_SLACK) {
 
 // Topmost-wins: nodeIndex is built in render order, so the LAST match is the one drawn on top —
 // the one the user believes they are pointing at.
-export function pickNode(point, nodeIndex, slack = 0) {
+export function pickNode(point, nodeIndex, slack = HIT_SLACK) {
   for (let i = nodeIndex.length - 1; i >= 0; i -= 1) {
     if (isInside(point, nodeIndex[i].xy, nodeIndex[i].hit, slack)) return nodeIndex[i];
   }

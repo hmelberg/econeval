@@ -5,7 +5,7 @@ import { scopedStore } from '../js/ui/scoped-store.js';
 import { createStore } from '../js/ui/store.js';
 import { addState } from '../js/ui/ops.js';
 
-// This file covers ONLY the DOM-free geometry helpers canvas.js exports (per the task-9 brief:
+// This file covers ONLY the DOM-free geometry helpers geometry.js exports (per the task-9 brief:
 // "Test: test/canvas-model.test.js (geometry helpers only)"), plus the scopedStore wrapper (also
 // pure — no DOM touched by any of these).
 
