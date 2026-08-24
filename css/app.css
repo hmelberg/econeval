@@ -1107,6 +1107,52 @@ dialog::backdrop {
   padding: var(--sp-2) var(--sp-3);
 }
 
+/* ---------- Context menu (Task 8 — right-click; replaces the deleted Delete tool's only
+   pointer route to delete a node/edge) ---------- */
+
+.ctx-menu {
+  position: fixed;   /* clientX/clientY from the triggering event are viewport coordinates */
+  z-index: 20;        /* above canvas-toast/#canvas-toolbar (z-index 5); dialogs sit in the
+                          browser's own top-layer via showModal() and are never open at the same
+                          time (the canvas is inert while a modal dialog is open). */
+  min-width: 168px;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+  padding: var(--sp-1) 0;
+  display: flex;
+  flex-direction: column;
+}
+.ctx-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: var(--ink);
+  border: none;
+  border-radius: 0;
+  padding: var(--sp-1) var(--sp-3);
+  font-size: var(--fs-2);
+  line-height: 1.6;
+  cursor: pointer;
+}
+.ctx-item:hover:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.ctx-item:disabled {
+  color: var(--muted);
+  cursor: default;
+  opacity: .6;
+}
+.ctx-sep {
+  height: 1px;
+  margin: var(--sp-1) 0;
+  background: var(--line);
+}
+
 /* ---------- Reduced motion ---------- */
 
 @media (prefers-reduced-motion: reduce) {

@@ -13,16 +13,18 @@
 //   openContextMenu,
 // }) -> { handlers, cancelGesture, destroy }
 //   handlers: {onNodePointerDown(e, id), onEdgePointerDown(e, target)} — the exact shape
-//   render.js's buildSvg expects. index.js passes this object straight through as buildSvg's
-//   `handlers` on every render, so a node/edge's OWN pointerdown listener (attached by render.js,
-//   which calls e.stopPropagation()) still routes into this module's gesture machinery.
+//   render.js's buildSvg expects. index.js merges a third handler, onContextMenu, into this
+//   object before passing it into buildSvg — see index.js's own header for why THAT handler lives
+//   there instead of here (Task 8 needs fitToView/tidyLayout/nodeIndex, all index.js's own).
 //   cancelGesture(): aborts any in-flight gesture without committing anything, returns true iff
 //   there was one to cancel — index.js's Escape handler calls this and uses the return value to
 //   give gesture-cancel priority over deselecting. destroy(): removes every listener this module
 //   registered.
-//   `openContextMenu` has no implementation until Task 8 — defaulted to a no-op here so this
-//   task's app is complete on its own; nothing calls it yet (Task 8 also wires the `contextmenu`
-//   listener, so the whole menu lands in one reviewable diff).
+//   `openContextMenu` ended up unused: Task 8 (the right-click menu) built entirely on index.js's
+//   own side instead of routing through this gesture state machine — a right-click needs no
+//   drag/drop-target resolution, so it never belonged to what this file owns. Left accepted
+//   (defaulted to a no-op) rather than removed, so createGestures's options contract doesn't
+//   shrink out from under a caller that still passes it.
 //
 // The real node NEVER moves during a drag (index.js's header + the design spec's §1.1): a
 // translucent clone (`.drag-ghost`) follows the cursor instead, so switching between the "move"
@@ -61,8 +63,8 @@ export function createGestures(svgEl, opts) {
   const {
     getNodeIndex, getModel, getActiveStore, clientToUser, flush, runOp,
     render, showToast, panBy, startRename, enterSubModel, selectTarget, getScopedSelection,
-    // Accepted (defaulted to a no-op) for the options contract's sake, per the brief — Task 8
-    // wires both the `contextmenu` listener and this handler; nothing calls it in this task.
+    // Accepted (defaulted to a no-op) for the options contract's sake — see the header comment
+    // above: Task 8 (the right-click menu) never ended up calling this from in here.
     openContextMenu = () => {},
   } = opts;
 
@@ -170,6 +172,16 @@ export function createGestures(svgEl, opts) {
   }
 
   function onNodePointerDown(e, id) {
+    // Right-click's own pointerdown/pointerup pair (button 2) reaches this listener exactly like a
+    // left-click would, arriving and resolving BEFORE the 'contextmenu' event that follows it. Left
+    // unguarded, a stationary right-click on a node was harmless here (its own !g.moved branch just
+    // selects the SAME node Task 8's onContextMenu selects again right after) — but the same gap on
+    // BACKGROUND (below) actively broke "Add child of selection", which deliberately preserves
+    // whatever was selected before a right-click: the incidental deselect-on-plain-click ran first
+    // and cleared it. Bail out here uniformly (all three entry points) so a right-click never drives
+    // ANY of this gesture machinery — Task 8's own contextmenu handlers are the only thing a
+    // right-click ever runs.
+    if (e.button !== 0) return;
     flush(); // controller ruling: sync any pending debounced YAML edit before this gesture starts
     const fresh = getNodeIndex().find((n) => sameNodeId(n, id));
     if (!fresh) return; // vanished under us (e.g. the flush() above triggered an edit that removed it)
@@ -185,6 +197,7 @@ export function createGestures(svgEl, opts) {
   }
 
   function onEdgePointerDown(e, target) {
+    if (e.button !== 0) return; // right-click: see onNodePointerDown's comment above
     flush(); // controller ruling: sync any pending debounced YAML edit before this gesture starts
     gesture = makeGesture(e, target);
     capture(e);
@@ -193,6 +206,9 @@ export function createGestures(svgEl, opts) {
   svgEl.addEventListener('pointerdown', onBackgroundPointerDown);
   function onBackgroundPointerDown(e) {
     if (e.target !== svgEl) return; // nodes/edges stopPropagation() their own pointerdown
+    if (e.button !== 0) return; // right-click: see onNodePointerDown's comment above — this is the
+                                 // case that actually broke without the guard (a right-click's own
+                                 // plain-click-deselects branch ran before 'contextmenu' did)
     flush(); // controller ruling: sync any pending debounced YAML edit before this gesture starts
     gesture = makeGesture(e, null);
     capture(e);

@@ -26,11 +26,13 @@
 
 import {
   renameState, deleteState, deleteTransition, renameNode, deleteNode, setLayout, clearLayout,
+  addChild, addState, nodeAt,
 } from '../ops.js';
 
-import { BASE_W, BASE_H, GRID, fitBox } from './geometry.js';
+import { BASE_W, BASE_H, GRID, fitBox, snapToGrid } from './geometry.js';
 import { el, buildSvg } from './render.js';
 import { createGestures } from './gestures.js';
+import { createContextMenu } from './context-menu.js';
 
 import { scopedStoreFor } from '../scoped-store.js';
 
@@ -68,6 +70,9 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
                              // re-rendered) rather than trusting a stale closure reference.
   let activeRename = null;  // { fo, input, target, currentName } while an inline rename is open
   let toastTimer = null;
+  const contextMenu = createContextMenu(); // Task 8: the right-click menu (context-menu.js is
+                                            // DOM-only and holds no business logic — every item
+                                            // below closes over runOp/flush/the store itself).
 
   function applyViewBox() {
     svgEl.setAttribute('viewBox', `${view.x} ${view.y} ${view.w} ${view.h}`);
@@ -403,7 +408,7 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
     nodeIndex = buildSvg(svgEl, model, {
       positions,
       selection: scopedSelection(),
-      handlers: gestures.handlers,
+      handlers, // gestures.handlers + Task 8's onContextMenu — see the createGestures call below
     });
   }
 
@@ -476,6 +481,178 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
     runOp(activeStore, (m) => clearLayout(m));
   }
 
+  // -------- context menu (Task 8): right-click restores the pointer route to delete a node/edge
+  // that the 4-tool toolbar's Delete tool took with it when Task 5 deleted the toolbar — Delete/
+  // Backspace on a selection still works, but there was no mouse route left. One runOp per item
+  // (brief's binding rule — "Each item must undo in a single ⌘Z"), except Rename (opens the same
+  // inline-rename UI Enter already does; its eventual commit, if any, is its own single runOp —
+  // see commitRename above) and Fit to view (pure view/zoom state, not a model mutation, same as
+  // the toolbar's own Fit button). Every op-producing action flushes first, same rule as every
+  // other op-producing gesture in this file. --------
+
+  function isEdgeTarget(target) {
+    return !!target && 'variant' in target;
+  }
+
+  // Resolves a bare {kind, key|path} id — the shape render.js's contextmenu listeners pass, same
+  // as onNodePointerDown's own `id` — to its full CURRENT nodeIndex entry (xy, treeKind, node,
+  // path: what startRename/Tidy-position/Add-child/Add-sibling need). Mirrors onNodePointerDown's
+  // own "flush() first, THEN resolve fresh off nodeIndex" discipline (see onContextMenu below).
+  function findNodeEntry(id) {
+    if (id.kind === 'state') return nodeIndex.find((n) => n.kind === 'state' && n.key === id.key);
+    return nodeIndex.find((n) => n.kind === 'node' && arraysEqual(n.path, id.path));
+  }
+
+  function buildNodeMenuItems(entry) {
+    const isState = entry.kind === 'state';
+    const layoutKey = isState ? entry.key : entry.path.join('/');
+
+    const items = [
+      {
+        label: 'Delete',
+        action: () => {
+          flush();
+          const activeStore = scopedStoreFor(store, currentModelPath);
+          if (isState) runOp(activeStore, (m) => deleteState(m, entry.key));
+          else runOp(activeStore, (m) => deleteNode(m, entry.path));
+        },
+      },
+      { label: 'Rename', action: () => startRename(entry) },
+      {
+        label: 'Tidy position',
+        action: () => {
+          flush();
+          const activeStore = scopedStoreFor(store, currentModelPath);
+          runOp(activeStore, (m) => clearLayout(m, layoutKey));
+        },
+      },
+    ];
+
+    if (!isState && entry.treeKind === 'submodel') {
+      items.push({ label: 'Enter sub-model', action: () => enterSubModel(entry) });
+    }
+
+    // Add child / Add sibling: tree only. Both are addChild — no new op (the brief's own ruling).
+    // Add sibling is addChild on the PARENT's path, addChild(m, path.slice(0, -1)); a root has no
+    // parent, so it's disabled there rather than reaching addChild's own empty-path guard.
+    if (!isState) {
+      const isRoot = entry.path.length === 1;
+      items.push({
+        label: 'Add child',
+        action: () => {
+          flush();
+          const activeStore = scopedStoreFor(store, currentModelPath);
+          runOp(activeStore, (m) => addChild(m, entry.path));
+        },
+      });
+      items.push({
+        label: 'Add sibling',
+        disabled: isRoot,
+        action: () => {
+          flush();
+          const activeStore = scopedStoreFor(store, currentModelPath);
+          runOp(activeStore, (m) => addChild(m, entry.path.slice(0, -1)));
+        },
+      });
+    }
+
+    return items;
+  }
+
+  // A tree "edge" IS its child node — deleting one is deleteNode(childPath), never a separate op
+  // (gestures.js's own onEdgePointerDown/selectTarget already encode this same distinction; this
+  // mirrors it rather than inventing a parallel rule).
+  function buildEdgeMenuItems(target) {
+    return [
+      {
+        label: 'Delete',
+        action: () => {
+          flush();
+          const activeStore = scopedStoreFor(store, currentModelPath);
+          if (target.variant === 'markov') runOp(activeStore, (m) => deleteTransition(m, target.from, target.to));
+          else runOp(activeStore, (m) => deleteNode(m, target.path));
+        },
+      },
+    ];
+  }
+
+  // Node/edge contextmenu handler — the third member of the `handlers` object render.js's buildSvg
+  // receives (merged with gestures.handlers below, near the createGestures call). flush() FIRST
+  // (mirrors onNodePointerDown), THEN resolve the target fresh off nodeIndex, so a menu never acts
+  // on a pre-flush reference.
+  function onContextMenu(e, target) {
+    flush();
+    if (isEdgeTarget(target)) {
+      selectTarget(target); // "select the target first" — the menu always visibly acts on
+                             // something highlighted (brief, verbatim)
+      contextMenu.open(e.clientX, e.clientY, buildEdgeMenuItems(target));
+      return;
+    }
+    const entry = findNodeEntry(target);
+    if (!entry) return; // vanished under the flush() above
+    selectTarget(target);
+    contextMenu.open(e.clientX, e.clientY, buildNodeMenuItems(entry));
+  }
+
+  // Background contextmenu — wired directly on svgEl (mirrors gestures.js's own background
+  // pointerdown, which also lives directly on svgEl rather than through render.js's handlers,
+  // since bare canvas has no node/edge <g> of its own to attach a listener to). Deliberately does
+  // NOT touch selection the way the node/edge case above does: a background left-click deselects,
+  // but "Add child of selection" needs whatever was selected BEFORE the right-click, so clearing
+  // it here would make that item permanently unusable from this menu.
+  function onBackgroundContextMenu(e) {
+    if (e.target !== svgEl) return; // a node/edge's own listener already handled this (and
+                                     // stopPropagation()'d) — this is the bare canvas only
+    e.preventDefault();
+    flush();
+    const model = resolveActiveModel();
+    if (!model) return; // nothing loaded — no menu to show
+    const { x, y } = clientToUser(e.clientX, e.clientY);
+    const at = snapToGrid([x, y]); // captured now — items run later, once the mouse has moved to
+                                    // hover the menu itself
+    const items = [];
+
+    if (model.type === 'markov') {
+      items.push({
+        label: 'Add state',
+        action: () => {
+          flush();
+          const activeStore = scopedStoreFor(store, currentModelPath);
+          runOp(activeStore, (m) => {
+            const m1 = addState(m);
+            const added = m1.states[m1.states.length - 1].name;
+            return setLayout(m1, added, at);
+          });
+        },
+      });
+    } else {
+      const sel = scopedSelection();
+      const hasParent = !!(sel && sel.kind === 'node');
+      items.push({
+        label: 'Add child of selection',
+        disabled: !hasParent,
+        action: () => {
+          flush();
+          const activeStore = scopedStoreFor(store, currentModelPath);
+          runOp(activeStore, (m) => {
+            const m1 = addChild(m, sel.id);
+            const parent = nodeAt(m1, sel.id);
+            const added = parent.children[parent.children.length - 1].name;
+            return setLayout(m1, [...sel.id, added].join('/'), at);
+          });
+        },
+      });
+    }
+
+    items.push(null); // separator
+    items.push({ label: 'Tidy layout', action: tidyLayout });
+    items.push({ label: 'Fit to view', action: fitToView });
+
+    contextMenu.open(e.clientX, e.clientY, items);
+  }
+
+  svgEl.addEventListener('contextmenu', onBackgroundContextMenu);
+
   function makeToolbarButton(id, glyph, label) {
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -521,6 +698,12 @@ export function createCanvas(svgEl, store, { layoutFor, flush = () => {} }) {
     selectTarget,
     getScopedSelection: scopedSelection,
   });
+
+  // render()'s buildSvg call (above) uses this, not gestures.handlers directly — Task 8 adds
+  // onContextMenu as the third handler render.js's four `contextmenu` listeners call; it lives in
+  // THIS file (not gestures.js) because building a menu's items needs fitToView/tidyLayout/
+  // nodeIndex, which are this file's own, not options threaded into createGestures.
+  const handlers = { ...gestures.handlers, onContextMenu };
 
   // Plain wheel / two-finger trackpad scroll pans; ctrl/meta+wheel zooms to the cursor (a
   // trackpad pinch arrives as ctrl+wheel — the platform convention this flips wheel to match).

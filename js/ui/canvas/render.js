@@ -7,10 +7,14 @@
 // logic").
 //
 // buildSvg(svgEl, model, {positions, selection, handlers}) -> nodeIndex
-//   handlers: {onNodePointerDown(e, id), onEdgePointerDown(e, target)}
-//   Task 8 adds a third, onContextMenu, together with the listeners that call it — do NOT wire a
-//   contextmenu listener here, so the whole context-menu feature lands in one reviewable diff
-//   (controller ruling).
+//   handlers: {onNodePointerDown(e, id), onEdgePointerDown(e, target), onContextMenu(e, target)}
+//   onContextMenu (Task 8) is called with the SAME second-argument shape onNodePointerDown/
+//   onEdgePointerDown already use ({kind:'state'|'node', key|path} for a node, {variant:'markov'|
+//   'tree', ...} for an edge) — one handler, both targets; canvas/index.js tells them apart the
+//   same way gestures.js's own isNodeTarget does ('variant' in target). Each of the four render
+//   functions below wires a `contextmenu` listener right beside its existing `pointerdown` one,
+//   calling e.preventDefault() (suppress the native menu) and e.stopPropagation() (so the
+//   background's own contextmenu listener, wired directly on svgEl by index.js, never also fires).
 //   nodeIndex entry: {kind:'state'|'node', key?|path?, xy, hit, el, treeKind?, node?, state?}
 //   `hit` comes from geometry.hitShapeFor(...) — a shape descriptor ({shape,r}|{shape,w,h}), NOT
 //   the old scalar hitR (Task 4 replaced every hitR with this).
@@ -109,6 +113,11 @@ export function renderMarkovEdge(from, to, fromXY, toXY, label, reward, selected
     e.stopPropagation();
     handlers.onEdgePointerDown(e, { variant: 'markov', from, to });
   });
+  g.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    handlers.onContextMenu(e, { variant: 'markov', from, to });
+  });
   return g;
 }
 
@@ -123,6 +132,11 @@ export function renderMarkovNode(state, xy, isSelected, handlers) {
   g.addEventListener('pointerdown', (e) => {
     e.stopPropagation();
     handlers.onNodePointerDown(e, { kind: 'state', key: state.name });
+  });
+  g.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    handlers.onContextMenu(e, { kind: 'state', key: state.name });
   });
   return g;
 }
@@ -240,6 +254,11 @@ export function renderTreeEdge(parentXY, childXY, label, childPath, childKind, h
     e.stopPropagation();
     handlers.onEdgePointerDown(e, { variant: 'tree', path: childPath });
   });
+  g.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    handlers.onContextMenu(e, { variant: 'tree', path: childPath });
+  });
   return g;
 }
 
@@ -281,6 +300,11 @@ export function renderTreeNode(node, xy, kind, isSelected, path, handlers) {
   g.addEventListener('pointerdown', (e) => {
     e.stopPropagation();
     handlers.onNodePointerDown(e, { kind: 'node', path });
+  });
+  g.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    handlers.onContextMenu(e, { kind: 'node', path });
   });
   return g;
 }
