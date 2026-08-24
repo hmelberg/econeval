@@ -51,7 +51,7 @@ export function buildOutline(model, modelPath = []) {
   }
 
   // Helper to create group headers
-  function addGroup(id, label) {
+  function addGroup(id, label, checkPaths = []) {
     addRow({
       id,
       kind: 'group',
@@ -60,7 +60,7 @@ export function buildOutline(model, modelPath = []) {
       depth: 0,
       parentId: null,
       sel: null,
-      checkPaths: [],
+      checkPaths,
     });
   }
 
@@ -108,7 +108,7 @@ export function buildOutline(model, modelPath = []) {
           // Regular p-type transitions
           for (const [target, entry] of Object.entries(row.to)) {
             const pValue = entry.p;
-            const detail = pValue === 'rest' ? 'rest' : (pValue === undefined ? '' : String(pValue));
+            const detail = pValue === 'rest' ? 'rest' : (pValue === undefined || pValue === null ? '' : String(pValue));
             addRow({
               id: `edge:${stateName}>${target}`,
               kind: 'edge',
@@ -185,7 +185,7 @@ export function buildOutline(model, modelPath = []) {
   }
 
   // ===== Settings group =====
-  addGroup('group:settings', 'Settings');
+  addGroup('group:settings', 'Settings', [`${prefix}settings`]);
 
   return rows;
 }

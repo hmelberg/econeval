@@ -48,9 +48,6 @@ import { scopePrefix, nodePathToCheckPath } from './outline/build.js';
 // ---------- Pure helpers (exported + tested in test/inspector-match.test.js) ----------
 // ================================================================================================
 
-// Re-export helpers from outline/build.js (they're tested there and used here)
-export { scopePrefix, nodePathToCheckPath };
-
 export function countByLevel(findings) {
   let errors = 0;
   let warnings = 0;

@@ -126,3 +126,84 @@ test('counts roll descendants up into their ancestors', () => {
   assert.deepEqual(counts.get('group:structure'), { errors: 1, warnings: 1 });
   assert.equal(counts.get('state:dead'), undefined);
 });
+
+test('settings group receives settings-scoped findings', () => {
+  const rows = buildOutline(MARKOV());
+  const settingsGroup = byId(rows, 'group:settings');
+  assert.deepEqual(settingsGroup.checkPaths, ['settings']);
+
+  const findings = [
+    { level: 'error', code: 'E_UNKNOWN_STATE', path: 'settings.start', message: 'unknown state' },
+  ];
+  const { byRow, residual } = attachFindings(rows, findings);
+
+  assert.deepEqual(byRow.get('group:settings').map((f) => f.code), ['E_UNKNOWN_STATE']);
+  assert.deepEqual(residual, []);
+});
+
+test('markov: multinomial transitions show count/total', () => {
+  const model = parseModel(`
+econeval: 1
+type: markov
+name: m
+settings: {cycles: 3}
+states:
+  well: {cost: 0, utility: 1}
+  dead: {cost: 0, utility: 0}
+transitions:
+  well:
+    multinomial:
+      dead: 5
+      well: 15
+  dead: {dead: 1}
+`);
+  const rows = buildOutline(model);
+  const edgeWellDead = byId(rows, 'edge:well>dead');
+  assert.equal(edgeWellDead.label, '→ dead');
+  assert.equal(edgeWellDead.detail, '5/20');
+  assert.deepEqual(edgeWellDead.sel, { kind: 'edge', id: { from: 'well', to: 'dead' }, modelPath: [] });
+  const edgeWellWell = byId(rows, 'edge:well>well');
+  assert.equal(edgeWellWell.detail, '15/20');
+});
+
+test('submodels group appears when models are populated', () => {
+  const model = parseModel(`
+econeval: 1
+type: markov
+name: m
+settings: {cycles: 3}
+states:
+  well: {cost: 0, utility: 1}
+  dead: {cost: 0, utility: 0}
+transitions:
+  well: {well: rest, dead: 0.1}
+  dead: {dead: 1}
+models:
+  post:
+    type: markov
+    settings: {cycles: 2}
+    states:
+      healthy: {cost: 0, utility: 1}
+      dead: {cost: 0, utility: 0}
+    transitions:
+      healthy: {healthy: rest, dead: 0.05}
+      dead: {dead: 1}
+`);
+  const rows = buildOutline(model);
+  const submodelsGroup = byId(rows, 'group:submodels');
+  assert.ok(submodelsGroup, 'submodels group should exist');
+  assert.equal(submodelsGroup.depth, 0);
+  assert.deepEqual(submodelsGroup.checkPaths, []);
+
+  const postSubmodel = byId(rows, 'submodel:post');
+  assert.ok(postSubmodel);
+  assert.equal(postSubmodel.depth, 1);
+  assert.equal(postSubmodel.parentId, 'group:submodels');
+  assert.deepEqual(postSubmodel.checkPaths, ['models.post']);
+});
+
+test('submodels group is omitted when models is empty or absent', () => {
+  const rows = buildOutline(MARKOV());
+  const submodelsGroup = byId(rows, 'group:submodels');
+  assert.equal(submodelsGroup, undefined, 'submodels group should not exist when models is empty');
+});
